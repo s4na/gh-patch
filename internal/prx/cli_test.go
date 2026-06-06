@@ -16,6 +16,7 @@ type fakeGitHub struct {
 	updatedComments  map[int64]string
 	createdComment   string
 	expectedPRNumber int
+	commentsByID     map[int64]Comment
 	fail             error
 }
 
@@ -54,6 +55,11 @@ func (f *fakeGitHub) ListComments(number int) ([]Comment, error) {
 func (f *fakeGitHub) GetComment(id int64) (Comment, error) {
 	if f.fail != nil {
 		return Comment{}, f.fail
+	}
+	if f.commentsByID != nil {
+		if comment, ok := f.commentsByID[id]; ok {
+			return comment, nil
+		}
 	}
 	for _, comment := range f.comments {
 		if comment.ID == id {
@@ -161,6 +167,23 @@ func TestBodyWriteMarkerMissingReturnsActionableError(t *testing.T) {
 	}
 }
 
+func TestBodyWriteMissingMarkerValueDoesNotTreatNextFlagAsMarker(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "plain body"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "write", "123", "--marker", "--file", "-"}, strings.NewReader("summary\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "missing value for --marker") {
+		t.Fatalf("stderr = %q, want missing marker value", stderr.String())
+	}
+	if gh.updatedPRBody != "" {
+		t.Fatalf("invalid marker input updated PR body: %q", gh.updatedPRBody)
+	}
+}
+
 func TestBodyWriteJSONReportsStructuredResult(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- ai-summary:start -->\nold\n<!-- ai-summary:end -->", URL: "https://example.test/pr/123"}}
 	var stdout, stderr bytes.Buffer
@@ -208,6 +231,48 @@ func TestCommentUpsertDryRunDoesNotCreateMissingComment(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "+ review") {
 		t.Fatalf("stdout = %q, want diff containing added review", stdout.String())
+	}
+}
+
+func TestCommentWriteRejectsCommentIDOutsidePullRequest(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, comments: []Comment{
+		{ID: 111, Body: "comment in PR 123", URL: "https://example.test/comment/111"},
+	}, commentsByID: map[int64]Comment{
+		222: {ID: 222, Body: "comment in another PR", URL: "https://example.test/comment/222"},
+	}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "write", "123", "--comment-id", "222", "-"}, strings.NewReader("review\n"), &stdout, &stderr, gh)
+
+	if code != ExitAmbiguousTarget {
+		t.Fatalf("exit code = %d, want %d", code, ExitAmbiguousTarget)
+	}
+	if !strings.Contains(stderr.String(), "comment not found in pull request: 222") {
+		t.Fatalf("stderr = %q, want comment mismatch error", stderr.String())
+	}
+	if gh.updatedComments != nil {
+		t.Fatalf("mismatched comment id updated comments: %#v", gh.updatedComments)
+	}
+}
+
+func TestCommentReadRejectsCommentIDOutsidePullRequest(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, comments: []Comment{
+		{ID: 111, Body: "comment in PR 123", URL: "https://example.test/comment/111"},
+	}, commentsByID: map[int64]Comment{
+		222: {ID: 222, Body: "comment in another PR", URL: "https://example.test/comment/222"},
+	}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "read", "123", "--comment-id", "222"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitAmbiguousTarget {
+		t.Fatalf("exit code = %d, want %d", code, ExitAmbiguousTarget)
+	}
+	if !strings.Contains(stderr.String(), "comment not found in pull request: 222") {
+		t.Fatalf("stderr = %q, want comment mismatch error", stderr.String())
+	}
+	if stdout.String() != "" {
+		t.Fatalf("stdout = %q, want empty output", stdout.String())
 	}
 }
 

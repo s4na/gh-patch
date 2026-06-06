@@ -103,7 +103,7 @@ func runBodyRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) 
 	marker := fs.String("marker", "", "HTML comment marker name")
 	plain := fs.Bool("plain", false, "print only marker content")
 	jsonOut := fs.Bool("json", false, "print JSON")
-	if err := fs.Parse(normalizeFlags(args)); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return ExitValidationError, validationError(err.Error(), "Use a PR number and optional --marker.", "gh prx body read 123 --marker ai-summary")
 	}
 	prNumber, err := onePRNumber(fs.Args(), "body read")
@@ -147,7 +147,7 @@ func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubCli
 	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
 	jsonOut := fs.Bool("json", false, "print JSON")
 	yes := fs.Bool("yes", false, "run non-interactively")
-	if err := fs.Parse(normalizeFlags(args)); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return ExitValidationError, validationError(err.Error(), "Use a PR number, --marker, and --file or -.", "gh prx body write 123 --marker ai-summary --file summary.md")
 	}
 	_ = yes
@@ -213,7 +213,7 @@ func runCommentRead(args []string, stdout io.Writer, gh GitHubClient) (int, erro
 	commentID := fs.Int64("comment-id", 0, "specific issue comment id")
 	plain := fs.Bool("plain", false, "print only marker content")
 	jsonOut := fs.Bool("json", false, "print JSON")
-	if err := fs.Parse(normalizeFlags(args)); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return ExitValidationError, validationError(err.Error(), "Use a PR number plus --marker or --comment-id.", "gh prx comment read 123 --marker ai-review")
 	}
 	prNumber, err := onePRNumber(fs.Args(), "comment read")
@@ -259,7 +259,7 @@ func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHub
 	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
 	jsonOut := fs.Bool("json", false, "print JSON")
 	yes := fs.Bool("yes", false, "run non-interactively")
-	if err := fs.Parse(normalizeFlags(args)); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return ExitValidationError, validationError(err.Error(), "Use a PR number, --comment-id, and --file or -.", "gh prx comment write 123 --comment-id 123456 --file review.md")
 	}
 	_ = yes
@@ -274,9 +274,9 @@ func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHub
 	if err != nil {
 		return ExitValidationError, err
 	}
-	comment, err := gh.GetComment(*commentID)
+	comment, err := commentByIDInPR(gh, prNumber, *commentID)
 	if err != nil {
-		return ExitGitHubAPIError, apiError(err)
+		return errorCode(err), err
 	}
 	newBody := strings.TrimSuffix(replacement, "\n")
 	oldContent := comment.Body
@@ -317,7 +317,7 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
 	jsonOut := fs.Bool("json", false, "print JSON")
 	yes := fs.Bool("yes", false, "run non-interactively")
-	if err := fs.Parse(normalizeFlags(args)); err != nil {
+	if err := parseFlagSet(fs, args); err != nil {
 		return ExitValidationError, validationError(err.Error(), "Use a PR number, --marker, and --file or -.", "gh prx comment upsert 123 --marker ai-review --file review.md")
 	}
 	_ = yes
@@ -370,11 +370,7 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 
 func selectComment(gh GitHubClient, prNumber int, marker string, commentID int64) (Comment, error) {
 	if commentID != 0 {
-		comment, err := gh.GetComment(commentID)
-		if err != nil {
-			return Comment{}, apiError(err)
-		}
-		return comment, nil
+		return commentByIDInPR(gh, prNumber, commentID)
 	}
 	if marker == "" {
 		return Comment{}, validationError("missing required flag: --marker or --comment-id", "Choose a marker search or one exact comment.", "gh prx comment read 123 --marker ai-review")
@@ -387,6 +383,25 @@ func selectComment(gh GitHubClient, prNumber int, marker string, commentID int64
 		return Comment{}, markerError("comment", prNumber, marker, "")
 	}
 	return matches[0], nil
+}
+
+func commentByIDInPR(gh GitHubClient, prNumber int, commentID int64) (Comment, error) {
+	comments, err := gh.ListComments(prNumber)
+	if err != nil {
+		return Comment{}, apiError(err)
+	}
+	for _, comment := range comments {
+		if comment.ID == commentID {
+			return comment, nil
+		}
+	}
+	return Comment{}, appError{
+		Code:    ExitAmbiguousTarget,
+		Kind:    "ambiguous_target",
+		Message: "comment not found in pull request: " + strconv.FormatInt(commentID, 10),
+		Fix:     []string{"Confirm the comment belongs to the specified PR.", "Use gh prx comment read <pr-number> --marker <marker> to list the managed target."},
+		Retry:   "gh prx comment read " + strconv.Itoa(prNumber) + " --marker ai-review",
+	}
 }
 
 func matchingComments(gh GitHubClient, prNumber int, marker string) ([]Comment, error) {
@@ -553,7 +568,7 @@ func ambiguousError(prNumber int, marker string, candidates []Comment) appError 
 	for _, c := range candidates {
 		lines = append(lines, fmt.Sprintf("candidate comment_id=%d author=%s updated=%s", c.ID, c.Author, c.UpdatedAt))
 	}
-	retry := "gh prx comment write " + strconv.Itoa(prNumber) + " --comment-id " + strconv.FormatInt(candidates[len(candidates)-1].ID, 10) + " --file review.md"
+	retry := "gh prx comment write " + strconv.Itoa(prNumber) + " --comment-id " + strconv.FormatInt(candidates[len(candidates)-1].ID, 10) + " --marker " + marker + " --file review.md"
 	return appError{Code: ExitAmbiguousTarget, Kind: "ambiguous_target", Message: "multiple comments matched marker: " + marker, Fix: lines, Retry: retry}
 }
 
@@ -574,6 +589,36 @@ func hasFlag(args []string, name string) bool {
 		}
 	}
 	return false
+}
+
+func parseFlagSet(fs *flag.FlagSet, args []string) error {
+	if err := validateValueFlags(args); err != nil {
+		return err
+	}
+	return fs.Parse(normalizeFlags(args))
+}
+
+func validateValueFlags(args []string) error {
+	valueFlags := map[string]bool{
+		"--marker":     true,
+		"--file":       true,
+		"--comment-id": true,
+	}
+	for i, arg := range args {
+		name := arg
+		if idx := strings.Index(arg, "="); idx >= 0 {
+			name = arg[:idx]
+			if valueFlags[name] && arg[idx+1:] == "" {
+				return fmt.Errorf("missing value for %s", name)
+			}
+		}
+		if valueFlags[name] && !strings.Contains(arg, "=") {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return fmt.Errorf("missing value for %s", name)
+			}
+		}
+	}
+	return nil
 }
 
 func normalizeFlags(args []string) []string {

@@ -18,22 +18,22 @@ fields as named read/write blocks and shows a diff before or after writes.
 
 ## Install
 
-As a gh extension named `gh-prx`:
+As a gh extension from this repository:
 
 ```sh
-gh extension install s4na/gh-prx
+gh extension install s4na/gh-patch
+gh patch body read 123 --marker ai-summary
 ```
 
-This repository is currently named `gh-patch`. If it is installed directly as a
-GitHub CLI extension, GitHub CLI exposes it as `gh patch ...`. The GoReleaser
-configuration also builds a `gh-patch` compatibility binary for that case. To
-use the command exactly as `gh prx ...`, publish the extension under a
-`gh-prx` repository or install the Homebrew binary and call `gh-prx ...`.
+GitHub CLI derives the extension command from the repository name, so this
+repository is exposed as `gh patch ...`. To use the command exactly as
+`gh prx ...`, publish the same binary from a `gh-prx` extension repository.
 
 With Homebrew after releases are published to the tap:
 
 ```sh
 brew install s4na/tap/gh-prx
+gh-prx body read 123 --marker ai-summary
 ```
 
 From source:
@@ -83,6 +83,11 @@ gh prx body write 123 --marker ai-summary --file summary.md --insert-if-missing
 
 If multiple comments contain the same marker, `gh-prx` refuses to update any of
 them and prints candidate comment IDs so callers can retry with `--comment-id`.
+When retrying a marker-scoped update, keep the marker explicit:
+
+```sh
+gh prx comment write 123 --comment-id 123456 --marker ai-review --file review.md
+```
 
 ## Diff Output
 
