@@ -46,6 +46,7 @@ brews:
     repository:
       owner: s4na
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/s4na/gh-patch
     description: Read and update named Markdown blocks in GitHub pull requests
     install: |

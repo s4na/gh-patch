@@ -27,7 +27,7 @@ gh patch body read 123 --marker ai-summary
 
 GitHub CLI derives the extension command from the repository name, so this
 repository is exposed as `gh patch ...`. To use the command exactly as
-`gh prx ...`, publish the same binary from a `gh-prx` extension repository.
+`gh-prx ...`, publish the same binary from a `gh-prx` extension repository.
 
 With Homebrew after releases are published to the tap:
 
@@ -47,29 +47,29 @@ go install github.com/s4na/gh-patch/cmd/gh-prx@latest
 Read a marker block from a PR body:
 
 ```sh
-gh prx body read 123 --marker ai-summary
-gh prx body read 123 --marker ai-summary --plain
+gh-prx body read 123 --marker ai-summary
+gh-prx body read 123 --marker ai-summary --plain
 ```
 
 Replace a marker block in a PR body:
 
 ```sh
-gh prx body write 123 --marker ai-summary --file summary.md
-cat summary.md | gh prx body write 123 --marker ai-summary -
+gh-prx body write 123 --marker ai-summary --file summary.md
+cat summary.md | gh-prx body write 123 --marker ai-summary -
 ```
 
 Preview a write without updating GitHub:
 
 ```sh
-gh prx body write 123 --marker ai-summary --file summary.md --dry-run
+gh-prx body write 123 --marker ai-summary --file summary.md --dry-run
 ```
 
 Read or update PR comments:
 
 ```sh
-gh prx comment read 123 --marker ai-review
-gh prx comment write 123 --comment-id 123456 --file review.md
-gh prx comment upsert 123 --marker ai-review --file review.md
+gh-prx comment read 123 --marker ai-review
+gh-prx comment write 123 --comment-id 123456 --file review.md
+gh-prx comment upsert 123 --marker ai-review --file review.md
 ```
 
 ## Conservative Defaults
@@ -78,7 +78,7 @@ By default, missing markers fail instead of inserting new blocks. Explicitly opt
 in when insertion is intended:
 
 ```sh
-gh prx body write 123 --marker ai-summary --file summary.md --insert-if-missing
+gh-prx body write 123 --marker ai-summary --file summary.md --insert-if-missing
 ```
 
 If multiple comments contain the same marker, `gh-prx` refuses to update any of
@@ -86,7 +86,7 @@ them and prints candidate comment IDs so callers can retry with `--comment-id`.
 When retrying a marker-scoped update, keep the marker explicit:
 
 ```sh
-gh prx comment write 123 --comment-id 123456 --marker ai-review --file review.md
+gh-prx comment write 123 --comment-id 123456 --marker ai-review --file review.md
 ```
 
 ## Diff Output
@@ -109,7 +109,7 @@ No-op updates are detected before calling GitHub and exit with code `5`.
 Pass `--json` for machine-readable output:
 
 ```sh
-gh prx body write 123 --marker ai-summary --file summary.md --json
+gh-prx body write 123 --marker ai-summary --file summary.md --json
 ```
 
 Example:

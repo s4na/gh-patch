@@ -184,6 +184,23 @@ func TestBodyWriteMissingMarkerValueDoesNotTreatNextFlagAsMarker(t *testing.T) {
 	}
 }
 
+func TestBodyWriteRejectsFileAndStdinTogether(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "write", "123", "--marker", "ai-summary", "-", "--file", "summary.md"}, strings.NewReader("summary\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "input specified twice") {
+		t.Fatalf("stderr = %q, want duplicate input error", stderr.String())
+	}
+	if gh.updatedPRBody != "" {
+		t.Fatalf("duplicate input updated PR body: %q", gh.updatedPRBody)
+	}
+}
+
 func TestBodyWriteJSONReportsStructuredResult(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- ai-summary:start -->\nold\n<!-- ai-summary:end -->", URL: "https://example.test/pr/123"}}
 	var stdout, stderr bytes.Buffer
@@ -273,6 +290,37 @@ func TestCommentReadRejectsCommentIDOutsidePullRequest(t *testing.T) {
 	}
 	if stdout.String() != "" {
 		t.Fatalf("stdout = %q, want empty output", stdout.String())
+	}
+}
+
+func TestCommentReadRejectsNegativeCommentIDAsValidationError(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "read", "123", "--comment-id", "-1"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "invalid flag: --comment-id") {
+		t.Fatalf("stderr = %q, want invalid comment id error", stderr.String())
+	}
+}
+
+func TestCommentWriteRejectsNegativeCommentIDAsValidationError(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "write", "123", "--comment-id", "-1", "-"}, strings.NewReader("review\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "invalid required flag: --comment-id") {
+		t.Fatalf("stderr = %q, want invalid required comment id error", stderr.String())
+	}
+	if gh.updatedComments != nil {
+		t.Fatalf("negative comment id updated comments: %#v", gh.updatedComments)
 	}
 }
 
