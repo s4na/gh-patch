@@ -76,6 +76,12 @@ gh-prx comment write 123 --comment-id 123456 --marker section --file section.md
 gh-prx comment upsert 123 --marker section --file section.md
 ```
 
+Replacing an entire comment is intentionally explicit:
+
+```sh
+gh-prx comment write 123 --comment-id 123456 --whole --file comment.md
+```
+
 ## Conservative Defaults
 
 By default, missing markers fail instead of inserting new blocks. Explicitly opt

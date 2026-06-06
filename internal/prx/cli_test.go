@@ -301,7 +301,7 @@ func TestCommentWriteRejectsCommentIDOutsidePullRequest(t *testing.T) {
 	}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"comment", "write", "123", "--comment-id", "222", "-"}, strings.NewReader("section\n"), &stdout, &stderr, gh)
+	code := Run([]string{"comment", "write", "123", "--comment-id", "222", "--marker", "section", "-"}, strings.NewReader("section\n"), &stdout, &stderr, gh)
 
 	if code != ExitAmbiguousTarget {
 		t.Fatalf("exit code = %d, want %d", code, ExitAmbiguousTarget)
@@ -311,6 +311,79 @@ func TestCommentWriteRejectsCommentIDOutsidePullRequest(t *testing.T) {
 	}
 	if gh.updatedComments != nil {
 		t.Fatalf("mismatched comment id updated comments: %#v", gh.updatedComments)
+	}
+}
+
+func TestCommentWriteRequiresMarkerUnlessWhole(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "write", "123", "--comment-id", "111", "-"}, strings.NewReader("replacement\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	errText := stderr.String()
+	for _, want := range []string{"missing required flag: --marker", "--whole", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md"} {
+		if !strings.Contains(errText, want) {
+			t.Fatalf("stderr = %q, want to contain %q", errText, want)
+		}
+	}
+	if gh.updatedComments != nil {
+		t.Fatalf("markerless write updated comments: %#v", gh.updatedComments)
+	}
+}
+
+func TestCommentWriteWholeRequiresExplicitFlag(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, comments: []Comment{
+		{ID: 111, Body: "<!-- section:start -->\nold\n<!-- section:end -->", URL: "https://example.test/comment/111"},
+	}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "write", "123", "--comment-id", "111", "--whole", "-"}, strings.NewReader("replacement\n"), &stdout, &stderr, gh)
+
+	if code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
+	}
+	if gh.updatedComments[111] != "replacement" {
+		t.Fatalf("updated comment = %q, want whole replacement", gh.updatedComments[111])
+	}
+	if !strings.Contains(stdout.String(), " - |") || !strings.Contains(stdout.String(), " + |    1 | replacement") {
+		t.Fatalf("stdout = %q, want whole-comment diff", stdout.String())
+	}
+}
+
+func TestCommentWriteRejectsMarkerAndWholeTogether(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "write", "123", "--comment-id", "111", "--marker", "section", "--whole", "-"}, strings.NewReader("replacement\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "conflicting flags: --marker and --whole") {
+		t.Fatalf("stderr = %q, want conflicting flag error", stderr.String())
+	}
+	if gh.updatedComments != nil {
+		t.Fatalf("conflicting flags updated comments: %#v", gh.updatedComments)
+	}
+}
+
+func TestCommentWriteRejectsWholeAndInsertIfMissingTogether(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "write", "123", "--comment-id", "111", "--whole", "--insert-if-missing", "-"}, strings.NewReader("replacement\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "conflicting flags: --whole and --insert-if-missing") {
+		t.Fatalf("stderr = %q, want conflicting flag error", stderr.String())
+	}
+	if gh.updatedComments != nil {
+		t.Fatalf("conflicting flags updated comments: %#v", gh.updatedComments)
 	}
 }
 
@@ -353,7 +426,7 @@ func TestCommentWriteRejectsNegativeCommentIDAsValidationError(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"comment", "write", "123", "--comment-id", "-1", "-"}, strings.NewReader("section\n"), &stdout, &stderr, gh)
+	code := Run([]string{"comment", "write", "123", "--comment-id", "-1", "--marker", "section", "-"}, strings.NewReader("section\n"), &stdout, &stderr, gh)
 
 	if code != ExitValidationError {
 		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
@@ -389,5 +462,30 @@ func TestCommentUpsertRejectsAmbiguousMarkerMatches(t *testing.T) {
 	}
 	if gh.updatedComments != nil {
 		t.Fatalf("ambiguous upsert updated comments: %#v", gh.updatedComments)
+	}
+}
+
+func TestCommentUpsertRejectsDuplicateMarkerBlocksInsideMatchedComment(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, comments: []Comment{
+		{ID: 111, Body: "<!-- section:start -->\na\n<!-- section:end -->\n<!-- section:start -->\nb\n<!-- section:end -->", Author: "github-actions[bot]", UpdatedAt: "2026-06-06T10:20:00Z"},
+	}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "upsert", "123", "--marker", "section", "-"}, strings.NewReader("replacement\n"), &stdout, &stderr, gh)
+
+	if code != ExitAmbiguousTarget {
+		t.Fatalf("exit code = %d, want %d", code, ExitAmbiguousTarget)
+	}
+	errText := stderr.String()
+	for _, want := range []string{"multiple marker blocks found in comment: section", "comment_id=111"} {
+		if !strings.Contains(errText, want) {
+			t.Fatalf("stderr = %q, want to contain %q", errText, want)
+		}
+	}
+	if gh.createdComment != "" {
+		t.Fatalf("duplicate marker upsert created comment: %q", gh.createdComment)
+	}
+	if gh.updatedComments != nil {
+		t.Fatalf("duplicate marker upsert updated comments: %#v", gh.updatedComments)
 	}
 }

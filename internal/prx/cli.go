@@ -265,11 +265,12 @@ func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHub
 	commentID := fs.Int64("comment-id", 0, "specific issue comment id")
 	file := fs.String("file", "", "read replacement content from file")
 	insert := fs.Bool("insert-if-missing", false, "append marker block if it does not exist")
+	whole := fs.Bool("whole", false, "replace the whole comment instead of a marker block")
 	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
 	jsonOut := fs.Bool("json", false, "print JSON")
 	yes := fs.Bool("yes", false, "run non-interactively")
 	if err := parseFlagSet(fs, args); err != nil {
-		return ExitValidationError, validationError(err.Error(), "Use a PR number, --comment-id, and --file or -.", "gh-prx comment write 123 --comment-id 123456 --file section.md")
+		return ExitValidationError, validationError(err.Error(), "Use a PR number, --comment-id, --marker, and --file or -.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
 	}
 	_ = yes
 	prNumber, inputPath, err := writeTarget(fs.Args(), "comment write")
@@ -277,7 +278,16 @@ func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHub
 		return ExitValidationError, err
 	}
 	if *commentID <= 0 {
-		return ExitValidationError, validationError("invalid required flag: --comment-id", "Choose one exact positive comment id to update.", "gh-prx comment write 123 --comment-id 123456 --file section.md")
+		return ExitValidationError, validationError("invalid required flag: --comment-id", "Choose one exact positive comment id to update.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
+	}
+	if *marker == "" && !*whole {
+		return ExitValidationError, validationError("missing required flag: --marker", "Choose the named marker block to update, or pass --whole to replace the entire comment.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
+	}
+	if *marker != "" && *whole {
+		return ExitValidationError, validationError("conflicting flags: --marker and --whole", "Use --marker for block updates or --whole for entire-comment replacement, not both.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
+	}
+	if *whole && *insert {
+		return ExitValidationError, validationError("conflicting flags: --whole and --insert-if-missing", "--insert-if-missing only applies to marker block updates.", "gh-prx comment write 123 --comment-id 123456 --whole --file comment.md")
 	}
 	replacement, err := readInput(stdin, inputPath, *file)
 	if err != nil {
@@ -429,7 +439,14 @@ func matchingComments(gh GitHubClient, prNumber int, marker string) ([]Comment, 
 	}
 	matches := make([]Comment, 0)
 	for _, comment := range comments {
-		if containsMarker(comment.Body, marker) {
+		matched, err := containsMarker(comment.Body, marker)
+		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return nil, ambiguousCommentMarkerError(prNumber, marker, comment)
+			}
+			return nil, err
+		}
+		if matched {
 			matches = append(matches, comment)
 		}
 	}
@@ -450,7 +467,17 @@ func matchingCurrentUserComments(gh GitHubClient, prNumber int, marker string) (
 	}
 	owned := make([]Comment, 0)
 	for _, comment := range comments {
-		if comment.Author == login && containsMarker(comment.Body, marker) {
+		if comment.Author != login {
+			continue
+		}
+		matched, err := containsMarker(comment.Body, marker)
+		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return nil, ambiguousCommentMarkerError(prNumber, marker, comment)
+			}
+			return nil, err
+		}
+		if matched {
 			owned = append(owned, comment)
 		}
 	}
@@ -621,6 +648,19 @@ func ambiguousMarkerError(target string, prNumber int, marker string) appError {
 	}
 }
 
+func ambiguousCommentMarkerError(prNumber int, marker string, comment Comment) appError {
+	return appError{
+		Code:    ExitAmbiguousTarget,
+		Kind:    "ambiguous_target",
+		Message: "multiple marker blocks found in comment: " + marker,
+		Fix: []string{
+			"Keep exactly one marker block for each marker name in the comment.",
+			fmt.Sprintf("candidate comment_id=%d author=%s updated=%s", comment.ID, comment.Author, comment.UpdatedAt),
+		},
+		Retry: "gh-prx comment write " + strconv.Itoa(prNumber) + " --comment-id " + strconv.FormatInt(comment.ID, 10) + " --marker " + marker + " --file section.md",
+	}
+}
+
 func apiError(err error) appError {
 	return appError{
 		Code:    ExitGitHubAPIError,
@@ -744,6 +784,7 @@ func commentHelp() string {
   %[1]s comment read 123 --comment-id 123456
   %[1]s comment write 123 --comment-id 123456 --marker section --file section.md
   %[1]s comment write 123 --comment-id 123456 --marker section --file section.md --dry-run
+  %[1]s comment write 123 --comment-id 123456 --whole --file comment.md
   %[1]s comment upsert 123 --marker section --file section.md
 `, cmd)
 }

@@ -68,6 +68,12 @@ gh-prx comment write 123 --comment-id 123456 --marker section --file section.md
 gh-prx comment upsert 123 --marker section --file section.md
 ```
 
+comment 全体の置換は明示的に指定します:
+
+```sh
+gh-prx comment write 123 --comment-id 123456 --whole --file comment.md
+```
+
 ## Conservative Defaults
 
 デフォルトでは、marker が存在しない場合に新しいブロックを挿入せず失敗します。挿入が意図した操作である場合だけ、明示的に opt in してください。

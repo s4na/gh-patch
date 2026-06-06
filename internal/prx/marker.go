@@ -103,7 +103,13 @@ func trimMarkerContent(content string) string {
 	return content
 }
 
-func containsMarker(body, marker string) bool {
+func containsMarker(body, marker string) (bool, error) {
 	_, err := findMarkerRange(body, marker)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, errMarkerNotFound) {
+		return false, nil
+	}
+	return false, err
 }
