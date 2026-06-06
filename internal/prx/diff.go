@@ -34,45 +34,40 @@ func renderLineDiff(oldContent, newContent string) string {
 	}
 
 	var out strings.Builder
-	oldWidth := maxInt(numberWidth(len(oldLines)), len("old"))
-	newWidth := maxInt(numberWidth(len(newLines)), len("new"))
+	lineWidth := maxInt(numberWidth(maxInt(len(oldLines), len(newLines))), len("line"))
 	opWidth := len("op")
-	writeDiffHeader(&out, oldWidth, newWidth)
+	writeDiffHeader(&out, lineWidth)
 	i, j := 0, 0
 	for i < len(oldLines) && j < len(newLines) {
 		switch {
 		case oldLines[i] == newLines[j]:
-			writeDiffLine(&out, oldWidth, newWidth, opWidth, i+1, j+1, ' ', oldLines[i])
+			writeDiffLine(&out, lineWidth, opWidth, i+1, ' ', oldLines[i])
 			i++
 			j++
 		case lcs[i+1][j] >= lcs[i][j+1]:
-			writeDiffLine(&out, oldWidth, newWidth, opWidth, i+1, 0, '-', oldLines[i])
+			writeDiffLine(&out, lineWidth, opWidth, i+1, '-', oldLines[i])
 			i++
 		default:
-			writeDiffLine(&out, oldWidth, newWidth, opWidth, 0, j+1, '+', newLines[j])
+			writeDiffLine(&out, lineWidth, opWidth, j+1, '+', newLines[j])
 			j++
 		}
 	}
 	for ; i < len(oldLines); i++ {
-		writeDiffLine(&out, oldWidth, newWidth, opWidth, i+1, 0, '-', oldLines[i])
+		writeDiffLine(&out, lineWidth, opWidth, i+1, '-', oldLines[i])
 	}
 	for ; j < len(newLines); j++ {
-		writeDiffLine(&out, oldWidth, newWidth, opWidth, 0, j+1, '+', newLines[j])
+		writeDiffLine(&out, lineWidth, opWidth, j+1, '+', newLines[j])
 	}
 	return out.String()
 }
 
-func writeDiffHeader(out *strings.Builder, oldWidth, newWidth int) {
-	writePaddedText(out, oldWidth, "old")
-	out.WriteString(" | ")
-	writePaddedText(out, newWidth, "new")
+func writeDiffHeader(out *strings.Builder, lineWidth int) {
+	writePaddedText(out, lineWidth, "line")
 	out.WriteString(" | op | content\n")
 }
 
-func writeDiffLine(out *strings.Builder, oldWidth, newWidth, opWidth, oldLine, newLine int, op rune, content string) {
-	writeLineNumber(out, oldWidth, oldLine)
-	out.WriteString(" | ")
-	writeLineNumber(out, newWidth, newLine)
+func writeDiffLine(out *strings.Builder, lineWidth, opWidth, line int, op rune, content string) {
+	writeLineNumber(out, lineWidth, line)
 	out.WriteString(" | ")
 	writePaddedText(out, opWidth, string(op))
 	out.WriteString(" | ")

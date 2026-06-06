@@ -84,15 +84,15 @@ gh-prx comment write 123 --comment-id 123456 --marker ai-review --file review.md
 
 ## Diff Output
 
-write は、管理対象ブロックに対する compact な line diff を表示します。先頭 2 列は marker block 内での old / new line number です。
+write は、管理対象ブロックに対する compact な line diff を表示します。line number は `-` 行では old 側、`+` 行では new 側の番号です。
 
 ```diff
 <!-- ai-summary:start -->
-old | new | op | content
-  1 |     |  - | old summary
-  2 |     |  - | old risk note
-    |   1 |  + | new summary
-    |   2 |  + | new risk note
+line | op | content
+   1 |  - | old summary
+   2 |  - | old risk note
+   1 |  + | new summary
+   2 |  + | new risk note
 <!-- ai-summary:end -->
 ```
 

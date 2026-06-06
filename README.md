@@ -95,16 +95,16 @@ gh-prx comment write 123 --comment-id 123456 --marker ai-review --file review.md
 
 ## Diff Output
 
-Writes print a compact line diff for the managed block. The first two columns
-are the old and new line numbers inside the marker block:
+Writes print a compact line diff for the managed block. The line number is from
+the old side for `-` rows and from the new side for `+` rows:
 
 ```diff
 <!-- ai-summary:start -->
-old | new | op | content
-  1 |     |  - | old summary
-  2 |     |  - | old risk note
-    |   1 |  + | new summary
-    |   2 |  + | new risk note
+line | op | content
+   1 |  - | old summary
+   2 |  - | old risk note
+   1 |  + | new summary
+   2 |  + | new risk note
 <!-- ai-summary:end -->
 ```
 
