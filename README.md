@@ -10,9 +10,9 @@ read and rewrite an entire PR body or long comment, mark the managed block with
 HTML comments and let the CLI read or replace only that block.
 
 ```md
-<!-- summary:start -->
+<!-- section:start -->
 ...
-<!-- summary:end -->
+<!-- section:end -->
 ```
 
 The GitHub API still updates full Markdown fields, but `gh-prx` presents those
@@ -24,7 +24,7 @@ As a gh extension from this repository:
 
 ```sh
 gh extension install s4na/gh-patch
-gh patch body read 123 --marker summary
+gh patch body read 123 --marker section
 ```
 
 GitHub CLI derives the extension command from the repository name, so this
@@ -37,7 +37,7 @@ With Homebrew after releases are published to the tap:
 
 ```sh
 brew install s4na/tap/gh-prx
-gh-prx body read 123 --marker summary
+gh-prx body read 123 --marker section
 ```
 
 From source:
@@ -51,29 +51,29 @@ go install github.com/s4na/gh-patch/cmd/gh-prx@latest
 Read a marker block from a PR body:
 
 ```sh
-gh-prx body read 123 --marker summary
-gh-prx body read 123 --marker summary --plain
+gh-prx body read 123 --marker section
+gh-prx body read 123 --marker section --plain
 ```
 
 Replace a marker block in a PR body:
 
 ```sh
-gh-prx body write 123 --marker summary --file summary.md
-cat summary.md | gh-prx body write 123 --marker summary -
+gh-prx body write 123 --marker section --file section.md
+cat section.md | gh-prx body write 123 --marker section -
 ```
 
 Preview a write without updating GitHub:
 
 ```sh
-gh-prx body write 123 --marker summary --file summary.md --dry-run
+gh-prx body write 123 --marker section --file section.md --dry-run
 ```
 
 Read or update PR comments:
 
 ```sh
-gh-prx comment read 123 --marker review
-gh-prx comment write 123 --comment-id 123456 --file review.md
-gh-prx comment upsert 123 --marker review --file review.md
+gh-prx comment read 123 --marker section
+gh-prx comment write 123 --comment-id 123456 --marker section --file section.md
+gh-prx comment upsert 123 --marker section --file section.md
 ```
 
 ## Conservative Defaults
@@ -82,7 +82,7 @@ By default, missing markers fail instead of inserting new blocks. Explicitly opt
 in when insertion is intended:
 
 ```sh
-gh-prx body write 123 --marker summary --file summary.md --insert-if-missing
+gh-prx body write 123 --marker section --file section.md --insert-if-missing
 ```
 
 If multiple comments contain the same marker, `gh-prx` refuses to update any of
@@ -90,7 +90,7 @@ them and prints candidate comment IDs so callers can retry with `--comment-id`.
 When retrying a marker-scoped update, keep the marker explicit:
 
 ```sh
-gh-prx comment write 123 --comment-id 123456 --marker review --file review.md
+gh-prx comment write 123 --comment-id 123456 --marker section --file section.md
 ```
 
 ## Diff Output
@@ -99,13 +99,13 @@ Writes print a compact line diff for the managed block. The line number is from
 the old side for `-` rows and from the new side for `+` rows:
 
 ```diff
-<!-- summary:start -->
+<!-- section:start -->
 op | line | content
- - |    1 | old summary
- - |    2 | old risk note
- + |    1 | new summary
- + |    2 | new risk note
-<!-- summary:end -->
+ - |    1 | old content
+ - |    2 | old line
+ + |    1 | new content
+ + |    2 | new line
+<!-- section:end -->
 ```
 
 No-op updates are detected before calling GitHub and exit with code `5`.
@@ -115,7 +115,7 @@ No-op updates are detected before calling GitHub and exit with code `5`.
 Pass `--json` for machine-readable output:
 
 ```sh
-gh-prx body write 123 --marker summary --file summary.md --json
+gh-prx body write 123 --marker section --file section.md --json
 ```
 
 Example:
@@ -124,7 +124,7 @@ Example:
 {
   "target": "pull_request_body",
   "pull_number": 123,
-  "marker": "summary",
+  "marker": "section",
   "updated": true,
   "changed": true,
   "dry_run": false,

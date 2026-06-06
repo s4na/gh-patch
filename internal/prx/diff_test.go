@@ -6,14 +6,14 @@ import (
 )
 
 func TestRenderLineDiffIncludesOldAndNewLineNumbers(t *testing.T) {
-	got := renderLineDiff("keep\nold summary\nold risk note\n", "keep\nnew summary\nnew risk note\n")
+	got := renderLineDiff("keep\nold content\nold line\n", "keep\nnew content\nnew line\n")
 	want := strings.Join([]string{
 		"op | line | content",
 		"   |    1 | keep",
-		" - |    2 | old summary",
-		" - |    3 | old risk note",
-		" + |    2 | new summary",
-		" + |    3 | new risk note",
+		" - |    2 | old content",
+		" - |    3 | old line",
+		" + |    2 | new content",
+		" + |    3 | new line",
 		"",
 	}, "\n")
 
