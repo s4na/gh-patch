@@ -100,10 +100,11 @@ are the old and new line numbers inside the marker block:
 
 ```diff
 <!-- ai-summary:start -->
-1   - old summary
-2   - old risk note
-  1 + new summary
-  2 + new risk note
+old | new | op | content
+  1 |     |  - | old summary
+  2 |     |  - | old risk note
+    |   1 |  + | new summary
+    |   2 |  + | new risk note
 <!-- ai-summary:end -->
 ```
 

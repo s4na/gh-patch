@@ -88,10 +88,11 @@ write は、管理対象ブロックに対する compact な line diff を表示
 
 ```diff
 <!-- ai-summary:start -->
-1   - old summary
-2   - old risk note
-  1 + new summary
-  2 + new risk note
+old | new | op | content
+  1 |     |  - | old summary
+  2 |     |  - | old risk note
+    |   1 |  + | new summary
+    |   2 |  + | new risk note
 <!-- ai-summary:end -->
 ```
 
