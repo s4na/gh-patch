@@ -28,6 +28,8 @@ gh patch body read 123 --marker ai-summary
 GitHub CLI derives the extension command from the repository name, so this
 repository is exposed as `gh patch ...`. To use the command exactly as
 `gh-prx ...`, publish the same binary from a `gh-prx` extension repository.
+This repository also includes a root `gh-patch` wrapper for source-based gh
+extension installs.
 
 With Homebrew after releases are published to the tap:
 
@@ -121,7 +123,9 @@ Example:
   "marker": "ai-summary",
   "updated": true,
   "changed": true,
-  "url": "https://github.com/org/repo/pull/123"
+  "dry_run": false,
+  "url": "https://github.com/org/repo/pull/123",
+  "message": "<diff omitted>"
 }
 ```
 

@@ -17,7 +17,18 @@ type fakeGitHub struct {
 	createdComment   string
 	expectedPRNumber int
 	commentsByID     map[int64]Comment
+	currentLogin     string
 	fail             error
+}
+
+func (f *fakeGitHub) CurrentLogin() (string, error) {
+	if f.fail != nil {
+		return "", f.fail
+	}
+	if f.currentLogin == "" {
+		return "github-actions[bot]", nil
+	}
+	return f.currentLogin, nil
 }
 
 func (f *fakeGitHub) GetPullRequest(number int) (PullRequest, error) {
@@ -231,6 +242,32 @@ func TestCommentUpsertCreatesMarkerWrappedCommentWhenMissing(t *testing.T) {
 	want := "<!-- ai-review:start -->\nreview\n<!-- ai-review:end -->"
 	if gh.createdComment != want {
 		t.Fatalf("created comment = %q, want %q", gh.createdComment, want)
+	}
+}
+
+func TestCommentUpsertUpdatesOnlyCurrentUserMarkerComment(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, currentLogin: "review-bot", comments: []Comment{
+		{ID: 111, Author: "external-user", Body: "<!-- ai-review:start -->\nattacker\n<!-- ai-review:end -->", URL: "https://example.test/comment/111"},
+		{ID: 222, Author: "review-bot", Body: "<!-- ai-review:start -->\nold\n<!-- ai-review:end -->", URL: "https://example.test/comment/222"},
+	}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "upsert", "123", "--marker", "ai-review", "-"}, strings.NewReader("new\n"), &stdout, &stderr, gh)
+
+	if code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
+	}
+	if gh.updatedComments[222] != "<!-- ai-review:start -->\nnew\n<!-- ai-review:end -->" {
+		t.Fatalf("bot comment update = %q, want marker-wrapped new content", gh.updatedComments[222])
+	}
+	if len(gh.updatedComments) != 1 {
+		t.Fatalf("updated comments = %#v, want only current user's comment updated", gh.updatedComments)
+	}
+	if _, ok := gh.updatedComments[111]; ok {
+		t.Fatalf("external user's comment was updated: %#v", gh.updatedComments)
+	}
+	if gh.createdComment != "" {
+		t.Fatalf("upsert created comment instead of updating current user's comment: %q", gh.createdComment)
 	}
 }
 

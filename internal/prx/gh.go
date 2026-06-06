@@ -14,6 +14,16 @@ func NewGHCLI() GHCLI {
 	return GHCLI{}
 }
 
+func (g GHCLI) CurrentLogin() (string, error) {
+	var user struct {
+		Login string `json:"login"`
+	}
+	if err := g.apiJSON(&user, "user"); err != nil {
+		return "", err
+	}
+	return user.Login, nil
+}
+
 func (g GHCLI) GetPullRequest(number int) (PullRequest, error) {
 	var pr struct {
 		Number  int    `json:"number"`

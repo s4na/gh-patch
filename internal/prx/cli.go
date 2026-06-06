@@ -118,6 +118,9 @@ func runBodyRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) 
 	if *marker != "" {
 		output, err = readMarker(pr.Body, *marker, *plain)
 		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return ExitAmbiguousTarget, ambiguousMarkerError("body", prNumber, *marker)
+			}
 			return ExitMarkerNotFound, markerError("body", prNumber, *marker, "")
 		}
 	}
@@ -168,6 +171,9 @@ func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubCli
 	}
 	newBody, oldContent, newContent, err := replaceMarker(pr.Body, *marker, replacement)
 	if err != nil {
+		if errors.Is(err, errMarkerAmbiguous) {
+			return ExitAmbiguousTarget, ambiguousMarkerError("body", prNumber, *marker)
+		}
 		if !*insert {
 			return ExitMarkerNotFound, markerError("body", prNumber, *marker, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file summary.md --insert-if-missing")
 		}
@@ -228,6 +234,9 @@ func runCommentRead(args []string, stdout io.Writer, gh GitHubClient) (int, erro
 	if *marker != "" {
 		output, err = readMarker(comment.Body, *marker, *plain)
 		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return ExitAmbiguousTarget, ambiguousMarkerError("comment", prNumber, *marker)
+			}
 			return ExitMarkerNotFound, markerError("comment", prNumber, *marker, "")
 		}
 	}
@@ -285,6 +294,9 @@ func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHub
 	if *marker != "" {
 		newBody, oldContent, newContent, err = replaceMarker(comment.Body, *marker, replacement)
 		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return ExitAmbiguousTarget, ambiguousMarkerError("comment", prNumber, *marker)
+			}
 			if !*insert {
 				return ExitMarkerNotFound, markerError("comment", prNumber, *marker, "gh-prx comment write "+strconv.Itoa(prNumber)+" --comment-id "+strconv.FormatInt(*commentID, 10)+" --marker "+*marker+" --file review.md --insert-if-missing")
 			}
@@ -332,7 +344,7 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 	if err != nil {
 		return ExitValidationError, err
 	}
-	matches, err := matchingComments(gh, prNumber, *marker)
+	matches, err := matchingCurrentUserComments(gh, prNumber, *marker)
 	if err != nil {
 		return errorCode(err), err
 	}
@@ -352,6 +364,9 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 	comment := matches[0]
 	newBody, oldContent, _, err := replaceMarker(comment.Body, *marker, replacement)
 	if err != nil {
+		if errors.Is(err, errMarkerAmbiguous) {
+			return ExitAmbiguousTarget, ambiguousMarkerError("comment", prNumber, *marker)
+		}
 		return ExitMarkerNotFound, markerError("comment", prNumber, *marker, "")
 	}
 	diff := renderMarkerDiff(*marker, oldContent, newContent)
@@ -422,6 +437,27 @@ func matchingComments(gh GitHubClient, prNumber int, marker string) ([]Comment, 
 		return nil, ambiguousError(prNumber, marker, matches)
 	}
 	return matches, nil
+}
+
+func matchingCurrentUserComments(gh GitHubClient, prNumber int, marker string) ([]Comment, error) {
+	login, err := gh.CurrentLogin()
+	if err != nil {
+		return nil, apiError(err)
+	}
+	comments, err := gh.ListComments(prNumber)
+	if err != nil {
+		return nil, apiError(err)
+	}
+	owned := make([]Comment, 0)
+	for _, comment := range comments {
+		if comment.Author == login && containsMarker(comment.Body, marker) {
+			owned = append(owned, comment)
+		}
+	}
+	if len(owned) > 1 {
+		return nil, ambiguousError(prNumber, marker, owned)
+	}
+	return owned, nil
 }
 
 func onePRNumber(args []string, command string) (int, error) {
@@ -575,6 +611,16 @@ func ambiguousError(prNumber int, marker string, candidates []Comment) appError 
 	return appError{Code: ExitAmbiguousTarget, Kind: "ambiguous_target", Message: "multiple comments matched marker: " + marker, Fix: lines, Retry: retry}
 }
 
+func ambiguousMarkerError(target string, prNumber int, marker string) appError {
+	return appError{
+		Code:    ExitAmbiguousTarget,
+		Kind:    "ambiguous_target",
+		Message: "multiple marker blocks found in PR " + target + ": " + marker,
+		Fix:     []string{"Keep exactly one marker block for each marker name in the PR " + target + "."},
+		Retry:   "gh-prx " + target + " read " + strconv.Itoa(prNumber) + " --marker " + marker,
+	}
+}
+
 func apiError(err error) appError {
 	return appError{
 		Code:    ExitGitHubAPIError,
@@ -692,7 +738,7 @@ func bodyHelp() string {
 func commentHelp() string {
 	return `Examples:
   gh-prx comment read 123 --marker ai-review
-  gh-prx comment read 123 --comment-id 123456 --plain
+  gh-prx comment read 123 --comment-id 123456
   gh-prx comment write 123 --comment-id 123456 --file review.md
   gh-prx comment write 123 --comment-id 123456 --marker ai-review --file review.md --dry-run
   gh-prx comment upsert 123 --marker ai-review --file review.md

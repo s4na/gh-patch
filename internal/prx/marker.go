@@ -1,8 +1,13 @@
 package prx
 
 import (
-	"fmt"
+	"errors"
 	"strings"
+)
+
+var (
+	errMarkerNotFound  = errors.New("marker not found")
+	errMarkerAmbiguous = errors.New("marker is ambiguous")
 )
 
 type MarkerRange struct {
@@ -23,15 +28,18 @@ func findMarkerRange(body, marker string) (MarkerRange, error) {
 	startToken, endToken := markerTokens(marker)
 	start := strings.Index(body, startToken)
 	if start < 0 {
-		return MarkerRange{}, fmt.Errorf("marker not found")
+		return MarkerRange{}, errMarkerNotFound
 	}
 	content := start + len(startToken)
 	endRel := strings.Index(body[content:], endToken)
 	if endRel < 0 {
-		return MarkerRange{}, fmt.Errorf("marker not found")
+		return MarkerRange{}, errMarkerNotFound
 	}
 	end := content + endRel
 	afterEnd := end + len(endToken)
+	if strings.Contains(body[afterEnd:], startToken) {
+		return MarkerRange{}, errMarkerAmbiguous
+	}
 	return MarkerRange{
 		Marker:     marker,
 		StartToken: startToken,

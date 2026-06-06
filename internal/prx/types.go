@@ -24,6 +24,7 @@ type Comment struct {
 }
 
 type GitHubClient interface {
+	CurrentLogin() (string, error)
 	GetPullRequest(number int) (PullRequest, error)
 	UpdatePullRequestBody(number int, body string) (PullRequest, error)
 	ListComments(number int) ([]Comment, error)
