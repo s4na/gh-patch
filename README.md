@@ -1,5 +1,7 @@
 # gh-prx
 
+[日本語版](README.ja.md)
+
 `gh-prx` is a small Go CLI for safely reading and updating named Markdown
 blocks in GitHub pull request bodies and PR comments.
 
@@ -143,5 +145,6 @@ Example:
 
 ## CI
 
-The repository runs `gofmt`, `go test ./...`, and builds both `./cmd/gh-prx`
-and `./cmd/gh-patch` in GitHub Actions.
+The repository runs `gofmt`, `go test ./...`, builds both `./cmd/gh-prx` and
+`./cmd/gh-patch`, and audits GitHub Actions workflows with `zizmor` in GitHub
+Actions.
