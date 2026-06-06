@@ -180,6 +180,61 @@ func TestBodyWriteMarkerMissingReturnsActionableError(t *testing.T) {
 	}
 }
 
+func TestBodyReadMarkerMissingDoesNotSuggestInsertIfMissing(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "plain body"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "read", "123", "--marker", "section"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitMarkerNotFound {
+		t.Fatalf("exit code = %d, want %d", code, ExitMarkerNotFound)
+	}
+	errText := stderr.String()
+	if !strings.Contains(errText, "marker not found: section") {
+		t.Fatalf("stderr = %q, want marker not found", errText)
+	}
+	if strings.Contains(errText, "--insert-if-missing") {
+		t.Fatalf("stderr = %q, read command should not suggest --insert-if-missing", errText)
+	}
+}
+
+func TestBodyWriteInsertIfMissingRejectsPartialMarkerBlock(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "intro\n<!-- section:start -->\npartial\n"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "write", "123", "--marker", "section", "--insert-if-missing", "-"}, strings.NewReader("replacement\n"), &stdout, &stderr, gh)
+
+	if code != ExitAmbiguousTarget {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitAmbiguousTarget, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "multiple or malformed marker blocks found in PR body: section") {
+		t.Fatalf("stderr = %q, want ambiguous marker error", stderr.String())
+	}
+	if gh.updatedPRBody != "" {
+		t.Fatalf("partial marker body was updated: %q", gh.updatedPRBody)
+	}
+}
+
+func TestBodyWriteRejectsReplacementContainingSameMarkerToken(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- section:start -->\nold\n<!-- section:end -->"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "write", "123", "--marker", "section", "-"}, strings.NewReader("do not include <!-- section:start --> here\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	errText := stderr.String()
+	for _, want := range []string{"replacement contains marker token: section", "Disallowed tokens: <!-- section:start --> and <!-- section:end -->"} {
+		if !strings.Contains(errText, want) {
+			t.Fatalf("stderr = %q, want to contain %q", errText, want)
+		}
+	}
+	if gh.updatedPRBody != "" {
+		t.Fatalf("replacement marker token updated PR body: %q", gh.updatedPRBody)
+	}
+}
+
 func TestBodyWriteMissingMarkerValueDoesNotTreatNextFlagAsMarker(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "plain body"}}
 	var stdout, stderr bytes.Buffer
@@ -290,6 +345,26 @@ func TestCommentUpsertDryRunDoesNotCreateMissingComment(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want to contain %q", out, want)
 		}
+	}
+}
+
+func TestCommentUpsertRejectsReplacementContainingSameMarkerToken(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "upsert", "123", "--marker", "section", "-"}, strings.NewReader("bad <!-- section:end --> content\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "replacement contains marker token: section") {
+		t.Fatalf("stderr = %q, want marker token validation", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "gh-prx comment upsert 123 --marker section --file section.md") {
+		t.Fatalf("stderr = %q, want comment upsert retry", stderr.String())
+	}
+	if gh.createdComment != "" {
+		t.Fatalf("replacement marker token created comment: %q", gh.createdComment)
 	}
 }
 
@@ -477,7 +552,7 @@ func TestCommentUpsertRejectsDuplicateMarkerBlocksInsideMatchedComment(t *testin
 		t.Fatalf("exit code = %d, want %d", code, ExitAmbiguousTarget)
 	}
 	errText := stderr.String()
-	for _, want := range []string{"multiple marker blocks found in comment: section", "comment_id=111"} {
+	for _, want := range []string{"multiple or malformed marker blocks found in comment: section", "comment_id=111"} {
 		if !strings.Contains(errText, want) {
 			t.Fatalf("stderr = %q, want to contain %q", errText, want)
 		}

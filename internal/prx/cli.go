@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -174,12 +175,21 @@ func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubCli
 		if errors.Is(err, errMarkerAmbiguous) {
 			return ExitAmbiguousTarget, ambiguousMarkerError("body", prNumber, *marker)
 		}
+		if errors.Is(err, errReplacementContainsMarkers) {
+			return ExitValidationError, markerTokenInputError(*marker, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+		}
 		if !*insert {
-			return ExitMarkerNotFound, markerError("body", prNumber, *marker, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md --insert-if-missing")
+			return ExitMarkerNotFound, writeMarkerError("body", prNumber, *marker, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md --insert-if-missing")
 		}
 		oldContent = ""
 		newContent = strings.TrimSuffix(replacement, "\n")
-		newBody = insertMarkerIfMissing(pr.Body, *marker, replacement)
+		newBody, err = insertMarkerIfMissing(pr.Body, *marker, replacement)
+		if err != nil {
+			if errors.Is(err, errReplacementContainsMarkers) {
+				return ExitValidationError, markerTokenInputError(*marker, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+			}
+			return ExitValidationError, err
+		}
 	}
 	diff := renderMarkerDiff(*marker, oldContent, newContent)
 	if newBody == pr.Body {
@@ -307,12 +317,21 @@ func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHub
 			if errors.Is(err, errMarkerAmbiguous) {
 				return ExitAmbiguousTarget, ambiguousMarkerError("comment", prNumber, *marker)
 			}
+			if errors.Is(err, errReplacementContainsMarkers) {
+				return ExitValidationError, markerTokenInputError(*marker, "gh-prx comment write "+strconv.Itoa(prNumber)+" --comment-id "+strconv.FormatInt(*commentID, 10)+" --marker "+*marker+" --file section.md")
+			}
 			if !*insert {
-				return ExitMarkerNotFound, markerError("comment", prNumber, *marker, "gh-prx comment write "+strconv.Itoa(prNumber)+" --comment-id "+strconv.FormatInt(*commentID, 10)+" --marker "+*marker+" --file section.md --insert-if-missing")
+				return ExitMarkerNotFound, writeMarkerError("comment", prNumber, *marker, "gh-prx comment write "+strconv.Itoa(prNumber)+" --comment-id "+strconv.FormatInt(*commentID, 10)+" --marker "+*marker+" --file section.md --insert-if-missing")
 			}
 			oldContent = ""
 			newContent = strings.TrimSuffix(replacement, "\n")
-			newBody = insertMarkerIfMissing(comment.Body, *marker, replacement)
+			newBody, err = insertMarkerIfMissing(comment.Body, *marker, replacement)
+			if err != nil {
+				if errors.Is(err, errReplacementContainsMarkers) {
+					return ExitValidationError, markerTokenInputError(*marker, "gh-prx comment write "+strconv.Itoa(prNumber)+" --comment-id "+strconv.FormatInt(*commentID, 10)+" --marker "+*marker+" --file section.md")
+				}
+				return ExitValidationError, err
+			}
 		}
 		diff = renderMarkerDiff(*marker, oldContent, newContent)
 	} else {
@@ -360,6 +379,9 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 	}
 	newContent := strings.TrimSuffix(replacement, "\n")
 	if len(matches) == 0 {
+		if replacementContainsMarkerToken(*marker, replacement) {
+			return ExitValidationError, markerTokenInputError(*marker, "gh-prx comment upsert "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+		}
 		body := markerBlock(*marker, replacement)
 		diff := renderMarkerDiff(*marker, "", newContent)
 		if *dryRun {
@@ -376,6 +398,9 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 	if err != nil {
 		if errors.Is(err, errMarkerAmbiguous) {
 			return ExitAmbiguousTarget, ambiguousMarkerError("comment", prNumber, *marker)
+		}
+		if errors.Is(err, errReplacementContainsMarkers) {
+			return ExitValidationError, markerTokenInputError(*marker, "gh-prx comment upsert "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
 		}
 		return ExitMarkerNotFound, markerError("comment", prNumber, *marker, "")
 	}
@@ -618,14 +643,41 @@ func validationError(message, fix, retry string) appError {
 func markerError(target string, prNumber int, marker, retry string) appError {
 	start, end := markerTokens(marker)
 	fix := []string{
-		"Add the marker block to the PR " + target + ".",
-		"Retry with --insert-if-missing when creating the block is intended.",
+		"Confirm the marker name and target PR " + target + ".",
 		"Expected markers: " + start + " and " + end + ".",
 	}
 	if retry == "" {
 		retry = "gh-prx " + target + " read " + strconv.Itoa(prNumber) + " --marker " + marker
 	}
 	return appError{Code: ExitMarkerNotFound, Kind: "marker_not_found", Message: "marker not found: " + marker, Fix: fix, Retry: retry}
+}
+
+func writeMarkerError(target string, prNumber int, marker, retry string) appError {
+	start, end := markerTokens(marker)
+	fix := []string{
+		"Add the marker block to the PR " + target + ".",
+		"Retry with --insert-if-missing when creating the block is intended.",
+		"Expected markers: " + start + " and " + end + ".",
+	}
+	if retry == "" {
+		retry = "gh-prx " + target + " write " + strconv.Itoa(prNumber) + " --marker " + marker + " --file section.md --insert-if-missing"
+	}
+	return appError{Code: ExitMarkerNotFound, Kind: "marker_not_found", Message: "marker not found: " + marker, Fix: fix, Retry: retry}
+}
+
+func markerTokenInputError(marker, retry string) appError {
+	start, end := markerTokens(marker)
+	return appError{
+		Code:    ExitValidationError,
+		Kind:    "validation_error",
+		Message: "replacement contains marker token: " + marker,
+		Fix: []string{
+			"Remove the marker boundary tokens from the replacement content.",
+			"Use a different marker name when documenting marker examples inside the block.",
+			"Disallowed tokens: " + start + " and " + end + ".",
+		},
+		Retry: retry,
+	}
 }
 
 func ambiguousError(prNumber int, marker string, candidates []Comment) appError {
@@ -642,8 +694,8 @@ func ambiguousMarkerError(target string, prNumber int, marker string) appError {
 	return appError{
 		Code:    ExitAmbiguousTarget,
 		Kind:    "ambiguous_target",
-		Message: "multiple marker blocks found in PR " + target + ": " + marker,
-		Fix:     []string{"Keep exactly one marker block for each marker name in the PR " + target + "."},
+		Message: "multiple or malformed marker blocks found in PR " + target + ": " + marker,
+		Fix:     []string{"Keep exactly one complete marker block for each marker name in the PR " + target + "."},
 		Retry:   "gh-prx " + target + " read " + strconv.Itoa(prNumber) + " --marker " + marker,
 	}
 }
@@ -652,9 +704,9 @@ func ambiguousCommentMarkerError(prNumber int, marker string, comment Comment) a
 	return appError{
 		Code:    ExitAmbiguousTarget,
 		Kind:    "ambiguous_target",
-		Message: "multiple marker blocks found in comment: " + marker,
+		Message: "multiple or malformed marker blocks found in comment: " + marker,
 		Fix: []string{
-			"Keep exactly one marker block for each marker name in the comment.",
+			"Keep exactly one complete marker block for each marker name in the comment.",
 			fmt.Sprintf("candidate comment_id=%d author=%s updated=%s", comment.ID, comment.Author, comment.UpdatedAt),
 		},
 		Retry: "gh-prx comment write " + strconv.Itoa(prNumber) + " --comment-id " + strconv.FormatInt(comment.ID, 10) + " --marker " + marker + " --file section.md",
@@ -792,6 +844,12 @@ func commentHelp() string {
 func commandName() string {
 	if name := os.Getenv("GH_PRX_COMMAND_NAME"); name != "" {
 		return name
+	}
+	switch filepath.Base(os.Args[0]) {
+	case "gh-patch":
+		return "gh-patch"
+	case "gh-prx":
+		return "gh-prx"
 	}
 	return "gh-prx"
 }

@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	errMarkerNotFound  = errors.New("marker not found")
-	errMarkerAmbiguous = errors.New("marker is ambiguous")
+	errMarkerNotFound             = errors.New("marker not found")
+	errMarkerAmbiguous            = errors.New("marker is ambiguous")
+	errReplacementContainsMarkers = errors.New("replacement contains marker token")
 )
 
 type MarkerRange struct {
@@ -28,7 +29,7 @@ func findMarkerRange(body, marker string) (MarkerRange, error) {
 	startToken, endToken := markerTokens(marker)
 	startCount := strings.Count(body, startToken)
 	endCount := strings.Count(body, endToken)
-	if startCount == 0 || endCount == 0 {
+	if startCount == 0 && endCount == 0 {
 		return MarkerRange{}, errMarkerNotFound
 	}
 	if startCount != 1 || endCount != 1 {
@@ -38,7 +39,7 @@ func findMarkerRange(body, marker string) (MarkerRange, error) {
 	content := start + len(startToken)
 	endRel := strings.Index(body[content:], endToken)
 	if endRel < 0 {
-		return MarkerRange{}, errMarkerNotFound
+		return MarkerRange{}, errMarkerAmbiguous
 	}
 	end := content + endRel
 	afterEnd := end + len(endToken)
@@ -78,21 +79,32 @@ func replaceMarker(body, marker, replacement string) (string, string, string, er
 	if err != nil {
 		return "", "", "", err
 	}
+	if replacementContainsMarkerToken(marker, replacement) {
+		return "", "", "", errReplacementContainsMarkers
+	}
 	oldContent := trimMarkerContent(body[r.Content:r.End])
 	newBlock := markerBlock(marker, replacement)
 	return body[:r.Start] + newBlock + body[r.AfterEnd:], oldContent, strings.TrimSuffix(replacement, "\n"), nil
 }
 
-func insertMarkerIfMissing(body, marker, content string) string {
+func insertMarkerIfMissing(body, marker, content string) (string, error) {
+	if replacementContainsMarkerToken(marker, content) {
+		return "", errReplacementContainsMarkers
+	}
 	block := markerBlock(marker, content)
 	if strings.TrimSpace(body) == "" {
-		return block
+		return block, nil
 	}
 	separator := "\n\n"
 	if strings.HasSuffix(body, "\n") {
 		separator = "\n"
 	}
-	return body + separator + block
+	return body + separator + block, nil
+}
+
+func replacementContainsMarkerToken(marker, content string) bool {
+	startToken, endToken := markerTokens(marker)
+	return strings.Contains(content, startToken) || strings.Contains(content, endToken)
 }
 
 func trimMarkerContent(content string) string {

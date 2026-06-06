@@ -82,7 +82,7 @@ gh-prx comment write 123 --comment-id 123456 --whole --file comment.md
 gh-prx body write 123 --marker section --file section.md --insert-if-missing
 ```
 
-複数の comment が同じ marker を含んでいる場合、`gh-prx` はどれも更新せず、retry 用の candidate comment ID を表示します。marker-scoped update として retry する場合は、marker も明示してください。
+marker 指定で comment を読む場合に複数の comment が同じ marker を含んでいると、`gh-prx` は暗黙に1つを選ばず、retry 用の candidate comment ID を表示します。`comment upsert` はより狭く、current GitHub user が作成した marker comment だけを対象にします。marker-scoped write として retry する場合は、marker も明示してください。
 
 ```sh
 gh-prx comment write 123 --comment-id 123456 --marker section --file section.md

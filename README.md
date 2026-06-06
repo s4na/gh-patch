@@ -91,9 +91,11 @@ in when insertion is intended:
 gh-prx body write 123 --marker section --file section.md --insert-if-missing
 ```
 
-If multiple comments contain the same marker, `gh-prx` refuses to update any of
-them and prints candidate comment IDs so callers can retry with `--comment-id`.
-When retrying a marker-scoped update, keep the marker explicit:
+For marker-based comment reads, if multiple comments contain the same marker,
+`gh-prx` refuses to pick one implicitly and prints candidate comment IDs so
+callers can retry with `--comment-id`. `comment upsert` is narrower: it only
+matches marker comments authored by the current GitHub user.
+When retrying a marker-scoped write, keep the marker explicit:
 
 ```sh
 gh-prx comment write 123 --comment-id 123456 --marker section --file section.md
@@ -114,7 +116,7 @@ op | line | content
 <!-- section:end -->
 ```
 
-No-op updates are detected before calling GitHub and exit with code `5`.
+No-op updates are detected before updating GitHub and exit with code `5`.
 
 ## JSON
 

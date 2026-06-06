@@ -3,4 +3,5 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export GH_PRX_COMMAND_NAME="gh patch"
-exec go run "$root/cmd/gh-patch" "$@"
+cd "$root"
+exec go run ./cmd/gh-patch "$@"
