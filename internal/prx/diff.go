@@ -1,6 +1,7 @@
 package prx
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -33,38 +34,57 @@ func renderLineDiff(oldContent, newContent string) string {
 	}
 
 	var out strings.Builder
+	oldWidth := numberWidth(len(oldLines))
+	newWidth := numberWidth(len(newLines))
 	i, j := 0, 0
 	for i < len(oldLines) && j < len(newLines) {
 		switch {
 		case oldLines[i] == newLines[j]:
-			out.WriteString("  ")
-			out.WriteString(oldLines[i])
-			out.WriteByte('\n')
+			writeDiffLine(&out, oldWidth, newWidth, i+1, j+1, ' ', oldLines[i])
 			i++
 			j++
 		case lcs[i+1][j] >= lcs[i][j+1]:
-			out.WriteString("- ")
-			out.WriteString(oldLines[i])
-			out.WriteByte('\n')
+			writeDiffLine(&out, oldWidth, newWidth, i+1, 0, '-', oldLines[i])
 			i++
 		default:
-			out.WriteString("+ ")
-			out.WriteString(newLines[j])
-			out.WriteByte('\n')
+			writeDiffLine(&out, oldWidth, newWidth, 0, j+1, '+', newLines[j])
 			j++
 		}
 	}
 	for ; i < len(oldLines); i++ {
-		out.WriteString("- ")
-		out.WriteString(oldLines[i])
-		out.WriteByte('\n')
+		writeDiffLine(&out, oldWidth, newWidth, i+1, 0, '-', oldLines[i])
 	}
 	for ; j < len(newLines); j++ {
-		out.WriteString("+ ")
-		out.WriteString(newLines[j])
-		out.WriteByte('\n')
+		writeDiffLine(&out, oldWidth, newWidth, 0, j+1, '+', newLines[j])
 	}
 	return out.String()
+}
+
+func writeDiffLine(out *strings.Builder, oldWidth, newWidth, oldLine, newLine int, op rune, content string) {
+	writeLineNumber(out, oldWidth, oldLine)
+	out.WriteByte(' ')
+	writeLineNumber(out, newWidth, newLine)
+	out.WriteByte(' ')
+	out.WriteRune(op)
+	out.WriteByte(' ')
+	out.WriteString(content)
+	out.WriteByte('\n')
+}
+
+func writeLineNumber(out *strings.Builder, width, line int) {
+	if line == 0 {
+		out.WriteString(strings.Repeat(" ", width))
+		return
+	}
+	out.WriteString(fmt.Sprintf("%*d", width, line))
+}
+
+func numberWidth(maxLine int) int {
+	width := len(fmt.Sprintf("%d", maxLine))
+	if width < 1 {
+		return 1
+	}
+	return width
 }
 
 func splitLines(content string) []string {

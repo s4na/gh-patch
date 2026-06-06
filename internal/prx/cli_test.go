@@ -139,8 +139,10 @@ func TestBodyWriteDryRunPrintsDiffWithoutUpdating(t *testing.T) {
 		t.Fatalf("dry-run updated PR body: %q", gh.updatedPRBody)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "- old summary") || !strings.Contains(out, "+ new summary") {
-		t.Fatalf("diff output = %q, want old/new lines", out)
+	for _, want := range []string{"<!-- ai-summary:start -->", "1   - old summary", "  1 + new summary", "<!-- ai-summary:end -->"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("diff output = %q, want to contain %q", out, want)
+		}
 	}
 }
 
@@ -283,8 +285,11 @@ func TestCommentUpsertDryRunDoesNotCreateMissingComment(t *testing.T) {
 	if gh.createdComment != "" {
 		t.Fatalf("dry-run created comment: %q", gh.createdComment)
 	}
-	if !strings.Contains(stdout.String(), "+ review") {
-		t.Fatalf("stdout = %q, want diff containing added review", stdout.String())
+	out := stdout.String()
+	for _, want := range []string{"<!-- ai-review:start -->", "  1 + review", "<!-- ai-review:end -->"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want to contain %q", out, want)
+		}
 	}
 }
 
