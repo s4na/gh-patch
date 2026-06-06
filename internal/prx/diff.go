@@ -62,14 +62,15 @@ func renderLineDiff(oldContent, newContent string) string {
 }
 
 func writeDiffHeader(out *strings.Builder, lineWidth int) {
+	out.WriteString("op | ")
 	writePaddedText(out, lineWidth, "line")
-	out.WriteString(" | op | content\n")
+	out.WriteString(" | content\n")
 }
 
 func writeDiffLine(out *strings.Builder, lineWidth, opWidth, line int, op rune, content string) {
-	writeLineNumber(out, lineWidth, line)
-	out.WriteString(" | ")
 	writePaddedText(out, opWidth, string(op))
+	out.WriteString(" | ")
+	writeLineNumber(out, lineWidth, line)
 	out.WriteString(" | ")
 	out.WriteString(content)
 	out.WriteByte('\n')

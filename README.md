@@ -100,11 +100,11 @@ the old side for `-` rows and from the new side for `+` rows:
 
 ```diff
 <!-- ai-summary:start -->
-line | op | content
-   1 |  - | old summary
-   2 |  - | old risk note
-   1 |  + | new summary
-   2 |  + | new risk note
+op | line | content
+ - |    1 | old summary
+ - |    2 | old risk note
+ + |    1 | new summary
+ + |    2 | new risk note
 <!-- ai-summary:end -->
 ```
 
