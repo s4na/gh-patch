@@ -702,16 +702,17 @@ func normalizeFlags(args []string) []string {
 }
 
 func rootHelp() string {
-	return `gh-prx treats GitHub pull request markdown fields as named read/write blocks.
+	cmd := commandName()
+	return fmt.Sprintf(`%s treats GitHub pull request markdown fields as named read/write blocks.
 
 Examples:
-  gh-prx body read 123 --marker ai-summary
-  gh-prx body read 123 --marker ai-summary --plain
-  gh-prx body write 123 --marker ai-summary --file summary.md --dry-run
-  cat summary.md | gh-prx body write 123 --marker ai-summary -
-  gh-prx comment read 123 --marker ai-review
-  gh-prx comment write 123 --comment-id 123456 --file review.md
-  gh-prx comment upsert 123 --marker ai-review --file review.md
+  %[1]s body read 123 --marker ai-summary
+  %[1]s body read 123 --marker ai-summary --plain
+  %[1]s body write 123 --marker ai-summary --file summary.md --dry-run
+  cat summary.md | %[1]s body write 123 --marker ai-summary -
+  %[1]s comment read 123 --marker ai-review
+  %[1]s comment write 123 --comment-id 123456 --file review.md
+  %[1]s comment upsert 123 --marker ai-review --file review.md
 
 Exit codes:
   0  success
@@ -722,25 +723,34 @@ Exit codes:
   5  no changes
 
 Use --json for machine-readable output and --dry-run to preview writes.
-`
+`, cmd)
 }
 
 func bodyHelp() string {
-	return `Examples:
-  gh-prx body read 123 --marker ai-summary
-  gh-prx body read 123 --marker ai-summary --plain
-  gh-prx body write 123 --marker ai-summary --file summary.md
-  gh-prx body write 123 --marker ai-summary --file summary.md --dry-run
-  cat summary.md | gh-prx body write 123 --marker ai-summary -
-`
+	cmd := commandName()
+	return fmt.Sprintf(`Examples:
+  %[1]s body read 123 --marker ai-summary
+  %[1]s body read 123 --marker ai-summary --plain
+  %[1]s body write 123 --marker ai-summary --file summary.md
+  %[1]s body write 123 --marker ai-summary --file summary.md --dry-run
+  cat summary.md | %[1]s body write 123 --marker ai-summary -
+`, cmd)
 }
 
 func commentHelp() string {
-	return `Examples:
-  gh-prx comment read 123 --marker ai-review
-  gh-prx comment read 123 --comment-id 123456
-  gh-prx comment write 123 --comment-id 123456 --file review.md
-  gh-prx comment write 123 --comment-id 123456 --marker ai-review --file review.md --dry-run
-  gh-prx comment upsert 123 --marker ai-review --file review.md
-`
+	cmd := commandName()
+	return fmt.Sprintf(`Examples:
+  %[1]s comment read 123 --marker ai-review
+  %[1]s comment read 123 --comment-id 123456
+  %[1]s comment write 123 --comment-id 123456 --file review.md
+  %[1]s comment write 123 --comment-id 123456 --marker ai-review --file review.md --dry-run
+  %[1]s comment upsert 123 --marker ai-review --file review.md
+`, cmd)
+}
+
+func commandName() string {
+	if name := os.Getenv("GH_PRX_COMMAND_NAME"); name != "" {
+		return name
+	}
+	return "gh-prx"
 }

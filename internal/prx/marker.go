@@ -26,10 +26,15 @@ func markerTokens(marker string) (string, string) {
 
 func findMarkerRange(body, marker string) (MarkerRange, error) {
 	startToken, endToken := markerTokens(marker)
-	start := strings.Index(body, startToken)
-	if start < 0 {
+	startCount := strings.Count(body, startToken)
+	endCount := strings.Count(body, endToken)
+	if startCount == 0 || endCount == 0 {
 		return MarkerRange{}, errMarkerNotFound
 	}
+	if startCount != 1 || endCount != 1 {
+		return MarkerRange{}, errMarkerAmbiguous
+	}
+	start := strings.Index(body, startToken)
 	content := start + len(startToken)
 	endRel := strings.Index(body[content:], endToken)
 	if endRel < 0 {
@@ -37,9 +42,6 @@ func findMarkerRange(body, marker string) (MarkerRange, error) {
 	}
 	end := content + endRel
 	afterEnd := end + len(endToken)
-	if strings.Contains(body[afterEnd:], startToken) {
-		return MarkerRange{}, errMarkerAmbiguous
-	}
 	return MarkerRange{
 		Marker:     marker,
 		StartToken: startToken,

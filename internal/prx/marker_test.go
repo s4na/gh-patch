@@ -42,6 +42,15 @@ func TestReplaceMarkerRejectsDuplicateBlocks(t *testing.T) {
 	}
 }
 
+func TestReplaceMarkerRejectsNestedDuplicateStart(t *testing.T) {
+	body := "<!-- ai-summary:start -->\none\n<!-- ai-summary:start -->\ntwo\n<!-- ai-summary:end -->\n<!-- ai-summary:end -->"
+
+	_, _, _, err := replaceMarker(body, "ai-summary", "new\n")
+	if err != errMarkerAmbiguous {
+		t.Fatalf("replaceMarker error = %v, want errMarkerAmbiguous", err)
+	}
+}
+
 func TestInsertMarkerIfMissingAppendsNamedBlock(t *testing.T) {
 	got := insertMarkerIfMissing("intro\n", "ai-summary", "new summary\n")
 	want := "intro\n\n<!-- ai-summary:start -->\nnew summary\n<!-- ai-summary:end -->"
