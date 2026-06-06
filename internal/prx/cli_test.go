@@ -113,10 +113,10 @@ func (f *fakeGitHub) checkPRNumber(number int) error {
 }
 
 func TestBodyReadPlainPrintsMarkerContent(t *testing.T) {
-	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- ai-summary:start -->\nsummary\n<!-- ai-summary:end -->"}}
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- summary:start -->\nsummary\n<!-- summary:end -->"}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"body", "read", "123", "--marker", "ai-summary", "--plain"}, strings.NewReader(""), &stdout, &stderr, gh)
+	code := Run([]string{"body", "read", "123", "--marker", "summary", "--plain"}, strings.NewReader(""), &stdout, &stderr, gh)
 
 	if code != ExitSuccess {
 		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
@@ -127,10 +127,10 @@ func TestBodyReadPlainPrintsMarkerContent(t *testing.T) {
 }
 
 func TestBodyWriteDryRunPrintsDiffWithoutUpdating(t *testing.T) {
-	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- ai-summary:start -->\nold summary\n<!-- ai-summary:end -->", URL: "https://example.test/pr/123"}}
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- summary:start -->\nold summary\n<!-- summary:end -->", URL: "https://example.test/pr/123"}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"body", "write", "123", "--marker", "ai-summary", "-", "--dry-run"}, strings.NewReader("new summary\n"), &stdout, &stderr, gh)
+	code := Run([]string{"body", "write", "123", "--marker", "summary", "-", "--dry-run"}, strings.NewReader("new summary\n"), &stdout, &stderr, gh)
 
 	if code != ExitSuccess {
 		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
@@ -139,7 +139,7 @@ func TestBodyWriteDryRunPrintsDiffWithoutUpdating(t *testing.T) {
 		t.Fatalf("dry-run updated PR body: %q", gh.updatedPRBody)
 	}
 	out := stdout.String()
-	for _, want := range []string{"<!-- ai-summary:start -->", "op | line | content", " - |    1 | old summary", " + |    1 | new summary", "<!-- ai-summary:end -->"} {
+	for _, want := range []string{"<!-- summary:start -->", "op | line | content", " - |    1 | old summary", " + |    1 | new summary", "<!-- summary:end -->"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("diff output = %q, want to contain %q", out, want)
 		}
@@ -147,10 +147,10 @@ func TestBodyWriteDryRunPrintsDiffWithoutUpdating(t *testing.T) {
 }
 
 func TestBodyWriteNoChangesReturnsDedicatedExitCode(t *testing.T) {
-	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- ai-summary:start -->\nsame\n<!-- ai-summary:end -->"}}
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- summary:start -->\nsame\n<!-- summary:end -->"}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"body", "write", "123", "--marker", "ai-summary", "-"}, strings.NewReader("same\n"), &stdout, &stderr, gh)
+	code := Run([]string{"body", "write", "123", "--marker", "summary", "-"}, strings.NewReader("same\n"), &stdout, &stderr, gh)
 
 	if code != ExitNoChanges {
 		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitNoChanges, stderr.String())
@@ -167,13 +167,13 @@ func TestBodyWriteMarkerMissingReturnsActionableError(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "plain body"}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"body", "write", "123", "--marker", "ai-summary", "-"}, strings.NewReader("summary\n"), &stdout, &stderr, gh)
+	code := Run([]string{"body", "write", "123", "--marker", "summary", "-"}, strings.NewReader("summary\n"), &stdout, &stderr, gh)
 
 	if code != ExitMarkerNotFound {
 		t.Fatalf("exit code = %d, want %d", code, ExitMarkerNotFound)
 	}
 	errText := stderr.String()
-	for _, want := range []string{"marker not found: ai-summary", "<!-- ai-summary:start -->", "--insert-if-missing"} {
+	for _, want := range []string{"marker not found: summary", "<!-- summary:start -->", "--insert-if-missing"} {
 		if !strings.Contains(errText, want) {
 			t.Fatalf("stderr = %q, want to contain %q", errText, want)
 		}
@@ -201,7 +201,7 @@ func TestBodyWriteRejectsFileAndStdinTogether(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"body", "write", "123", "--marker", "ai-summary", "-", "--file", "summary.md"}, strings.NewReader("summary\n"), &stdout, &stderr, gh)
+	code := Run([]string{"body", "write", "123", "--marker", "summary", "-", "--file", "summary.md"}, strings.NewReader("summary\n"), &stdout, &stderr, gh)
 
 	if code != ExitValidationError {
 		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
@@ -215,10 +215,10 @@ func TestBodyWriteRejectsFileAndStdinTogether(t *testing.T) {
 }
 
 func TestBodyWriteJSONReportsStructuredResult(t *testing.T) {
-	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- ai-summary:start -->\nold\n<!-- ai-summary:end -->", URL: "https://example.test/pr/123"}}
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "<!-- summary:start -->\nold\n<!-- summary:end -->", URL: "https://example.test/pr/123"}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"body", "write", "123", "--marker", "ai-summary", "-", "--json"}, strings.NewReader("new\n"), &stdout, &stderr, gh)
+	code := Run([]string{"body", "write", "123", "--marker", "summary", "-", "--json"}, strings.NewReader("new\n"), &stdout, &stderr, gh)
 
 	if code != ExitSuccess {
 		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
@@ -227,8 +227,8 @@ func TestBodyWriteJSONReportsStructuredResult(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 		t.Fatalf("stdout is not valid JSON: %v; stdout=%s", err, stdout.String())
 	}
-	if result.Target != "pull_request_body" || result.PullNumber != 123 || result.Marker != "ai-summary" || !result.Updated || !result.Changed {
-		t.Fatalf("result = %+v, want updated pull_request_body for PR 123 marker ai-summary", result)
+	if result.Target != "pull_request_body" || result.PullNumber != 123 || result.Marker != "summary" || !result.Updated || !result.Changed {
+		t.Fatalf("result = %+v, want updated pull_request_body for PR 123 marker summary", result)
 	}
 }
 
@@ -236,12 +236,12 @@ func TestCommentUpsertCreatesMarkerWrappedCommentWhenMissing(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"comment", "upsert", "123", "--marker", "ai-review", "-"}, strings.NewReader("review\n"), &stdout, &stderr, gh)
+	code := Run([]string{"comment", "upsert", "123", "--marker", "review", "-"}, strings.NewReader("review\n"), &stdout, &stderr, gh)
 
 	if code != ExitSuccess {
 		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
 	}
-	want := "<!-- ai-review:start -->\nreview\n<!-- ai-review:end -->"
+	want := "<!-- review:start -->\nreview\n<!-- review:end -->"
 	if gh.createdComment != want {
 		t.Fatalf("created comment = %q, want %q", gh.createdComment, want)
 	}
@@ -249,17 +249,17 @@ func TestCommentUpsertCreatesMarkerWrappedCommentWhenMissing(t *testing.T) {
 
 func TestCommentUpsertUpdatesOnlyCurrentUserMarkerComment(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, currentLogin: "review-bot", comments: []Comment{
-		{ID: 111, Author: "external-user", Body: "<!-- ai-review:start -->\nattacker\n<!-- ai-review:end -->", URL: "https://example.test/comment/111"},
-		{ID: 222, Author: "review-bot", Body: "<!-- ai-review:start -->\nold\n<!-- ai-review:end -->", URL: "https://example.test/comment/222"},
+		{ID: 111, Author: "external-user", Body: "<!-- review:start -->\nattacker\n<!-- review:end -->", URL: "https://example.test/comment/111"},
+		{ID: 222, Author: "review-bot", Body: "<!-- review:start -->\nold\n<!-- review:end -->", URL: "https://example.test/comment/222"},
 	}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"comment", "upsert", "123", "--marker", "ai-review", "-"}, strings.NewReader("new\n"), &stdout, &stderr, gh)
+	code := Run([]string{"comment", "upsert", "123", "--marker", "review", "-"}, strings.NewReader("new\n"), &stdout, &stderr, gh)
 
 	if code != ExitSuccess {
 		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
 	}
-	if gh.updatedComments[222] != "<!-- ai-review:start -->\nnew\n<!-- ai-review:end -->" {
+	if gh.updatedComments[222] != "<!-- review:start -->\nnew\n<!-- review:end -->" {
 		t.Fatalf("bot comment update = %q, want marker-wrapped new content", gh.updatedComments[222])
 	}
 	if len(gh.updatedComments) != 1 {
@@ -277,7 +277,7 @@ func TestCommentUpsertDryRunDoesNotCreateMissingComment(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"comment", "upsert", "123", "--marker", "ai-review", "-", "--dry-run"}, strings.NewReader("review\n"), &stdout, &stderr, gh)
+	code := Run([]string{"comment", "upsert", "123", "--marker", "review", "-", "--dry-run"}, strings.NewReader("review\n"), &stdout, &stderr, gh)
 
 	if code != ExitSuccess {
 		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
@@ -286,7 +286,7 @@ func TestCommentUpsertDryRunDoesNotCreateMissingComment(t *testing.T) {
 		t.Fatalf("dry-run created comment: %q", gh.createdComment)
 	}
 	out := stdout.String()
-	for _, want := range []string{"<!-- ai-review:start -->", "op | line | content", " + |    1 | review", "<!-- ai-review:end -->"} {
+	for _, want := range []string{"<!-- review:start -->", "op | line | content", " + |    1 | review", "<!-- review:end -->"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stdout = %q, want to contain %q", out, want)
 		}
@@ -368,18 +368,18 @@ func TestCommentWriteRejectsNegativeCommentIDAsValidationError(t *testing.T) {
 
 func TestCommentUpsertRejectsAmbiguousMarkerMatches(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, comments: []Comment{
-		{ID: 111, Body: "<!-- ai-review:start -->\na\n<!-- ai-review:end -->", Author: "github-actions[bot]", UpdatedAt: "2026-06-06T10:20:00Z"},
-		{ID: 222, Body: "<!-- ai-review:start -->\nb\n<!-- ai-review:end -->", Author: "github-actions[bot]", UpdatedAt: "2026-06-06T10:25:00Z"},
+		{ID: 111, Body: "<!-- review:start -->\na\n<!-- review:end -->", Author: "github-actions[bot]", UpdatedAt: "2026-06-06T10:20:00Z"},
+		{ID: 222, Body: "<!-- review:start -->\nb\n<!-- review:end -->", Author: "github-actions[bot]", UpdatedAt: "2026-06-06T10:25:00Z"},
 	}}
 	var stdout, stderr bytes.Buffer
 
-	code := Run([]string{"comment", "upsert", "123", "--marker", "ai-review", "-"}, strings.NewReader("review\n"), &stdout, &stderr, gh)
+	code := Run([]string{"comment", "upsert", "123", "--marker", "review", "-"}, strings.NewReader("review\n"), &stdout, &stderr, gh)
 
 	if code != ExitAmbiguousTarget {
 		t.Fatalf("exit code = %d, want %d", code, ExitAmbiguousTarget)
 	}
 	errText := stderr.String()
-	for _, want := range []string{"multiple comments matched marker: ai-review", "comment_id=111", "comment_id=222"} {
+	for _, want := range []string{"multiple comments matched marker: review", "comment_id=111", "comment_id=222"} {
 		if !strings.Contains(errText, want) {
 			t.Fatalf("stderr = %q, want to contain %q", errText, want)
 		}

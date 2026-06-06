@@ -104,7 +104,7 @@ func runBodyRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) 
 	plain := fs.Bool("plain", false, "print only marker content")
 	jsonOut := fs.Bool("json", false, "print JSON")
 	if err := parseFlagSet(fs, args); err != nil {
-		return ExitValidationError, validationError(err.Error(), "Use a PR number and optional --marker.", "gh-prx body read 123 --marker ai-summary")
+		return ExitValidationError, validationError(err.Error(), "Use a PR number and optional --marker.", "gh-prx body read 123 --marker summary")
 	}
 	prNumber, err := onePRNumber(fs.Args(), "body read")
 	if err != nil {
@@ -151,7 +151,7 @@ func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubCli
 	jsonOut := fs.Bool("json", false, "print JSON")
 	yes := fs.Bool("yes", false, "run non-interactively")
 	if err := parseFlagSet(fs, args); err != nil {
-		return ExitValidationError, validationError(err.Error(), "Use a PR number, --marker, and --file or -.", "gh-prx body write 123 --marker ai-summary --file summary.md")
+		return ExitValidationError, validationError(err.Error(), "Use a PR number, --marker, and --file or -.", "gh-prx body write 123 --marker summary --file summary.md")
 	}
 	_ = yes
 	prNumber, inputPath, err := writeTarget(fs.Args(), "body write")
@@ -159,7 +159,7 @@ func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubCli
 		return ExitValidationError, err
 	}
 	if *marker == "" {
-		return ExitValidationError, validationError("missing required flag: --marker", "Choose the named marker block to update.", "gh-prx body write 123 --marker ai-summary --file summary.md")
+		return ExitValidationError, validationError("missing required flag: --marker", "Choose the named marker block to update.", "gh-prx body write 123 --marker summary --file summary.md")
 	}
 	replacement, err := readInput(stdin, inputPath, *file)
 	if err != nil {
@@ -220,7 +220,7 @@ func runCommentRead(args []string, stdout io.Writer, gh GitHubClient) (int, erro
 	plain := fs.Bool("plain", false, "print only marker content")
 	jsonOut := fs.Bool("json", false, "print JSON")
 	if err := parseFlagSet(fs, args); err != nil {
-		return ExitValidationError, validationError(err.Error(), "Use a PR number plus --marker or --comment-id.", "gh-prx comment read 123 --marker ai-review")
+		return ExitValidationError, validationError(err.Error(), "Use a PR number plus --marker or --comment-id.", "gh-prx comment read 123 --marker review")
 	}
 	prNumber, err := onePRNumber(fs.Args(), "comment read")
 	if err != nil {
@@ -330,7 +330,7 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 	jsonOut := fs.Bool("json", false, "print JSON")
 	yes := fs.Bool("yes", false, "run non-interactively")
 	if err := parseFlagSet(fs, args); err != nil {
-		return ExitValidationError, validationError(err.Error(), "Use a PR number, --marker, and --file or -.", "gh-prx comment upsert 123 --marker ai-review --file review.md")
+		return ExitValidationError, validationError(err.Error(), "Use a PR number, --marker, and --file or -.", "gh-prx comment upsert 123 --marker review --file review.md")
 	}
 	_ = yes
 	prNumber, inputPath, err := writeTarget(fs.Args(), "comment upsert")
@@ -338,7 +338,7 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 		return ExitValidationError, err
 	}
 	if *marker == "" {
-		return ExitValidationError, validationError("missing required flag: --marker", "Upsert needs a marker to find or create the managed comment.", "gh-prx comment upsert 123 --marker ai-review --file review.md")
+		return ExitValidationError, validationError("missing required flag: --marker", "Upsert needs a marker to find or create the managed comment.", "gh-prx comment upsert 123 --marker review --file review.md")
 	}
 	replacement, err := readInput(stdin, inputPath, *file)
 	if err != nil {
@@ -391,7 +391,7 @@ func selectComment(gh GitHubClient, prNumber int, marker string, commentID int64
 		return commentByIDInPR(gh, prNumber, commentID)
 	}
 	if marker == "" {
-		return Comment{}, validationError("missing required flag: --marker or --comment-id", "Choose a marker search or one exact comment.", "gh-prx comment read 123 --marker ai-review")
+		return Comment{}, validationError("missing required flag: --marker or --comment-id", "Choose a marker search or one exact comment.", "gh-prx comment read 123 --marker review")
 	}
 	matches, err := matchingComments(gh, prNumber, marker)
 	if err != nil {
@@ -418,7 +418,7 @@ func commentByIDInPR(gh GitHubClient, prNumber int, commentID int64) (Comment, e
 		Kind:    "ambiguous_target",
 		Message: "comment not found in pull request: " + strconv.FormatInt(commentID, 10),
 		Fix:     []string{"Confirm the comment belongs to the specified PR.", "Use gh-prx comment read <pr-number> --marker <marker> to list the managed target."},
-		Retry:   "gh-prx comment read " + strconv.Itoa(prNumber) + " --marker ai-review",
+		Retry:   "gh-prx comment read " + strconv.Itoa(prNumber) + " --marker review",
 	}
 }
 
@@ -462,22 +462,22 @@ func matchingCurrentUserComments(gh GitHubClient, prNumber int, marker string) (
 
 func onePRNumber(args []string, command string) (int, error) {
 	if len(args) != 1 {
-		return 0, validationError("expected exactly one PR number for "+command, "Pass the pull request number as the first positional argument.", "gh-prx "+command+" 123 --marker ai-summary")
+		return 0, validationError("expected exactly one PR number for "+command, "Pass the pull request number as the first positional argument.", "gh-prx "+command+" 123 --marker summary")
 	}
 	n, err := strconv.Atoi(args[0])
 	if err != nil || n <= 0 {
-		return 0, validationError("invalid PR number: "+args[0], "Use a positive numeric pull request number.", "gh-prx "+command+" 123 --marker ai-summary")
+		return 0, validationError("invalid PR number: "+args[0], "Use a positive numeric pull request number.", "gh-prx "+command+" 123 --marker summary")
 	}
 	return n, nil
 }
 
 func writeTarget(args []string, command string) (int, string, error) {
 	if len(args) < 1 || len(args) > 2 {
-		return 0, "", validationError("expected PR number and optional input path for "+command, "Use --file path or '-' for stdin.", "gh-prx "+command+" 123 --marker ai-summary --file summary.md")
+		return 0, "", validationError("expected PR number and optional input path for "+command, "Use --file path or '-' for stdin.", "gh-prx "+command+" 123 --marker summary --file summary.md")
 	}
 	prNumber, err := strconv.Atoi(args[0])
 	if err != nil || prNumber <= 0 {
-		return 0, "", validationError("invalid PR number: "+args[0], "Use a positive numeric pull request number.", "gh-prx "+command+" 123 --marker ai-summary --file summary.md")
+		return 0, "", validationError("invalid PR number: "+args[0], "Use a positive numeric pull request number.", "gh-prx "+command+" 123 --marker summary --file summary.md")
 	}
 	inputPath := ""
 	if len(args) == 2 {
@@ -488,37 +488,37 @@ func writeTarget(args []string, command string) (int, string, error) {
 
 func readInput(stdin io.Reader, positionalPath, fileFlag string) (string, error) {
 	if positionalPath != "" && fileFlag != "" {
-		return "", validationError("input specified twice", "Use either --file path or '-' for stdin, not both.", "gh-prx body write 123 --marker ai-summary --file summary.md")
+		return "", validationError("input specified twice", "Use either --file path or '-' for stdin, not both.", "gh-prx body write 123 --marker summary --file summary.md")
 	}
 	if fileFlag == "-" {
 		data, err := io.ReadAll(stdin)
 		if err != nil {
-			return "", validationError("cannot read stdin", "Pipe content into the command.", "cat summary.md | gh-prx body write 123 --marker ai-summary --file -")
+			return "", validationError("cannot read stdin", "Pipe content into the command.", "cat summary.md | gh-prx body write 123 --marker summary --file -")
 		}
 		return string(data), nil
 	}
 	if fileFlag != "" {
 		data, err := os.ReadFile(fileFlag)
 		if err != nil {
-			return "", validationError("cannot read file: "+fileFlag, "Check that the file exists and is readable.", "gh-prx body write 123 --marker ai-summary --file "+fileFlag)
+			return "", validationError("cannot read file: "+fileFlag, "Check that the file exists and is readable.", "gh-prx body write 123 --marker summary --file "+fileFlag)
 		}
 		return string(data), nil
 	}
 	if positionalPath == "-" {
 		data, err := io.ReadAll(stdin)
 		if err != nil {
-			return "", validationError("cannot read stdin", "Pipe content into the command.", "cat summary.md | gh-prx body write 123 --marker ai-summary -")
+			return "", validationError("cannot read stdin", "Pipe content into the command.", "cat summary.md | gh-prx body write 123 --marker summary -")
 		}
 		return string(data), nil
 	}
 	if positionalPath != "" {
 		data, err := os.ReadFile(positionalPath)
 		if err != nil {
-			return "", validationError("cannot read file: "+positionalPath, "Check that the file exists and is readable.", "gh-prx body write 123 --marker ai-summary --file "+positionalPath)
+			return "", validationError("cannot read file: "+positionalPath, "Check that the file exists and is readable.", "gh-prx body write 123 --marker summary --file "+positionalPath)
 		}
 		return string(data), nil
 	}
-	return "", validationError("missing input", "Pass replacement content with --file path or '-'.", "gh-prx body write 123 --marker ai-summary --file summary.md")
+	return "", validationError("missing input", "Pass replacement content with --file path or '-'.", "gh-prx body write 123 --marker summary --file summary.md")
 }
 
 func writeSuccess(stdout io.Writer, jsonOut bool, result commandResult, text string) (int, error) {
@@ -706,13 +706,13 @@ func rootHelp() string {
 	return fmt.Sprintf(`%s treats GitHub pull request markdown fields as named read/write blocks.
 
 Examples:
-  %[1]s body read 123 --marker ai-summary
-  %[1]s body read 123 --marker ai-summary --plain
-  %[1]s body write 123 --marker ai-summary --file summary.md --dry-run
-  cat summary.md | %[1]s body write 123 --marker ai-summary -
-  %[1]s comment read 123 --marker ai-review
+  %[1]s body read 123 --marker summary
+  %[1]s body read 123 --marker summary --plain
+  %[1]s body write 123 --marker summary --file summary.md --dry-run
+  cat summary.md | %[1]s body write 123 --marker summary -
+  %[1]s comment read 123 --marker review
   %[1]s comment write 123 --comment-id 123456 --file review.md
-  %[1]s comment upsert 123 --marker ai-review --file review.md
+  %[1]s comment upsert 123 --marker review --file review.md
 
 Exit codes:
   0  success
@@ -729,22 +729,22 @@ Use --json for machine-readable output and --dry-run to preview writes.
 func bodyHelp() string {
 	cmd := commandName()
 	return fmt.Sprintf(`Examples:
-  %[1]s body read 123 --marker ai-summary
-  %[1]s body read 123 --marker ai-summary --plain
-  %[1]s body write 123 --marker ai-summary --file summary.md
-  %[1]s body write 123 --marker ai-summary --file summary.md --dry-run
-  cat summary.md | %[1]s body write 123 --marker ai-summary -
+  %[1]s body read 123 --marker summary
+  %[1]s body read 123 --marker summary --plain
+  %[1]s body write 123 --marker summary --file summary.md
+  %[1]s body write 123 --marker summary --file summary.md --dry-run
+  cat summary.md | %[1]s body write 123 --marker summary -
 `, cmd)
 }
 
 func commentHelp() string {
 	cmd := commandName()
 	return fmt.Sprintf(`Examples:
-  %[1]s comment read 123 --marker ai-review
+  %[1]s comment read 123 --marker review
   %[1]s comment read 123 --comment-id 123456
   %[1]s comment write 123 --comment-id 123456 --file review.md
-  %[1]s comment write 123 --comment-id 123456 --marker ai-review --file review.md --dry-run
-  %[1]s comment upsert 123 --marker ai-review --file review.md
+  %[1]s comment write 123 --comment-id 123456 --marker review --file review.md --dry-run
+  %[1]s comment upsert 123 --marker review --file review.md
 `, cmd)
 }
 
