@@ -32,10 +32,21 @@ builds:
 
 archives:
   - id: default
+    ids:
+      - gh-prx
+      - gh-patch
     formats: ["tar.gz"]
     name_template: >-
       {{ .ProjectName }}_
       {{- .Os }}_
+      {{- .Arch }}
+  - id: gh-extension
+    ids:
+      - gh-patch
+    formats: ["binary"]
+    name_template: >-
+      gh-patch-
+      {{- .Os }}-
       {{- .Arch }}
 
 checksum:

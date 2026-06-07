@@ -28,7 +28,6 @@ type GitHubClient interface {
 	GetPullRequest(number int) (PullRequest, error)
 	UpdatePullRequestBody(number int, body string) (PullRequest, error)
 	ListComments(number int) ([]Comment, error)
-	GetComment(id int64) (Comment, error)
 	UpdateComment(id int64, body string) (Comment, error)
 	CreateComment(number int, body string) (Comment, error)
 }

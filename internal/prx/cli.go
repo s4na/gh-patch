@@ -58,8 +58,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, gh GitHubClie
 		result := commandResult{Error: err.Error(), ErrorKind: errorKind(err), ExitCode: errorCode(err)}
 		var app appError
 		if errors.As(err, &app) {
-			result.Fix = app.Fix
-			result.Retry = app.Retry
+			result.Fix = displayFixes(app.Fix)
+			result.Retry = displayCommand(app.Retry)
 		}
 		writeJSON(stdout, result)
 	} else {
@@ -777,15 +777,34 @@ func writeError(stderr io.Writer, err error) {
 	fmt.Fprintf(stderr, "error: %s\n\n", app.Message)
 	if len(app.Fix) > 0 {
 		fmt.Fprintln(stderr, "fix:")
-		for i, fix := range app.Fix {
+		for i, fix := range displayFixes(app.Fix) {
 			fmt.Fprintf(stderr, "  %d. %s\n", i+1, fix)
 		}
 		fmt.Fprintln(stderr)
 	}
 	if app.Retry != "" {
 		fmt.Fprintln(stderr, "retry:")
-		fmt.Fprintf(stderr, "  %s\n", app.Retry)
+		fmt.Fprintf(stderr, "  %s\n", displayCommand(app.Retry))
 	}
+}
+
+func displayFixes(fixes []string) []string {
+	if len(fixes) == 0 {
+		return nil
+	}
+	out := make([]string, len(fixes))
+	for i, fix := range fixes {
+		out[i] = displayCommand(fix)
+	}
+	return out
+}
+
+func displayCommand(text string) string {
+	cmd := commandName()
+	if cmd == "gh-prx" || text == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, "gh-prx", cmd)
 }
 
 func errorCode(err error) int {

@@ -19,7 +19,6 @@ type fakeGitHub struct {
 	updatedComments  map[int64]string
 	createdComment   string
 	expectedPRNumber int
-	commentsByID     map[int64]Comment
 	currentLogin     string
 	fail             error
 }
@@ -64,23 +63,6 @@ func (f *fakeGitHub) ListComments(number int) ([]Comment, error) {
 		return nil, f.fail
 	}
 	return f.comments, nil
-}
-
-func (f *fakeGitHub) GetComment(id int64) (Comment, error) {
-	if f.fail != nil {
-		return Comment{}, f.fail
-	}
-	if f.commentsByID != nil {
-		if comment, ok := f.commentsByID[id]; ok {
-			return comment, nil
-		}
-	}
-	for _, comment := range f.comments {
-		if comment.ID == id {
-			return comment, nil
-		}
-	}
-	return Comment{}, errors.New("not found")
 }
 
 func (f *fakeGitHub) UpdateComment(id int64, body string) (Comment, error) {
@@ -252,6 +234,53 @@ func TestBodyWriteMissingMarkerValueDoesNotTreatNextFlagAsMarker(t *testing.T) {
 	}
 	if gh.updatedPRBody != "" {
 		t.Fatalf("invalid marker input updated PR body: %q", gh.updatedPRBody)
+	}
+}
+
+func TestErrorsUseConfiguredCommandName(t *testing.T) {
+	t.Setenv("GH_PRX_COMMAND_NAME", "gh patch")
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "nope", "123"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	errText := stderr.String()
+	if !strings.Contains(errText, "Use: gh patch body read, write, or lines.") {
+		t.Fatalf("stderr = %q, want displayed command name in fix", errText)
+	}
+	if !strings.Contains(errText, "gh patch body --help") {
+		t.Fatalf("stderr = %q, want displayed command name in retry", errText)
+	}
+	if strings.Contains(errText, "gh-prx") {
+		t.Fatalf("stderr = %q, should not leak gh-prx command name", errText)
+	}
+}
+
+func TestJSONErrorsUseConfiguredCommandName(t *testing.T) {
+	t.Setenv("GH_PRX_COMMAND_NAME", "gh patch")
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "nope", "123", "--json"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	var result commandResult
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v; stdout=%s", err, stdout.String())
+	}
+	if result.Retry != "gh patch body --help" {
+		t.Fatalf("retry = %q, want configured command name", result.Retry)
+	}
+	if len(result.Fix) != 1 || !strings.Contains(result.Fix[0], "gh patch body read") {
+		t.Fatalf("fix = %#v, want configured command name", result.Fix)
+	}
+	if strings.Contains(stdout.String(), "gh-prx") {
+		t.Fatalf("stdout = %q, should not leak gh-prx command name", stdout.String())
 	}
 }
 
@@ -509,8 +538,6 @@ func TestCommentUpsertRejectsReplacementContainingSameMarkerToken(t *testing.T) 
 func TestCommentWriteRejectsCommentIDOutsidePullRequest(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, comments: []Comment{
 		{ID: 111, Body: "comment in PR 123", URL: "https://example.test/comment/111"},
-	}, commentsByID: map[int64]Comment{
-		222: {ID: 222, Body: "comment in another PR", URL: "https://example.test/comment/222"},
 	}}
 	var stdout, stderr bytes.Buffer
 
@@ -603,8 +630,6 @@ func TestCommentWriteRejectsWholeAndInsertIfMissingTogether(t *testing.T) {
 func TestCommentReadRejectsCommentIDOutsidePullRequest(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, comments: []Comment{
 		{ID: 111, Body: "comment in PR 123", URL: "https://example.test/comment/111"},
-	}, commentsByID: map[int64]Comment{
-		222: {ID: 222, Body: "comment in another PR", URL: "https://example.test/comment/222"},
 	}}
 	var stdout, stderr bytes.Buffer
 

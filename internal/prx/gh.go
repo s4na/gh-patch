@@ -76,22 +76,6 @@ func (g GHCLI) ListComments(number int) ([]Comment, error) {
 	return comments, nil
 }
 
-func (g GHCLI) GetComment(id int64) (Comment, error) {
-	var raw struct {
-		ID        int64  `json:"id"`
-		Body      string `json:"body"`
-		HTMLURL   string `json:"html_url"`
-		UpdatedAt string `json:"updated_at"`
-		User      struct {
-			Login string `json:"login"`
-		} `json:"user"`
-	}
-	if err := g.apiJSON(&raw, "repos/{owner}/{repo}/issues/comments/"+strconv.FormatInt(id, 10)); err != nil {
-		return Comment{}, err
-	}
-	return Comment{ID: raw.ID, Body: raw.Body, URL: raw.HTMLURL, Author: raw.User.Login, UpdatedAt: raw.UpdatedAt}, nil
-}
-
 func (g GHCLI) UpdateComment(id int64, body string) (Comment, error) {
 	var raw struct {
 		ID        int64  `json:"id"`
