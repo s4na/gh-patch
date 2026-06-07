@@ -17,6 +17,8 @@ HTML comments and let the CLI read or replace only that block.
 
 The GitHub API still updates full Markdown fields, but `gh-prx` presents those
 fields as named read/write blocks and shows a diff before or after writes.
+For existing PR bodies that do not have markers yet, it can also replace an
+explicit line range with expectation guards.
 
 ## Install
 
@@ -55,6 +57,12 @@ gh-prx body read 123 --marker section
 gh-prx body read 123 --marker section --plain
 ```
 
+Read a PR body line range and capture the current content hash:
+
+```sh
+gh-prx body read 123 --range 12:18 --json
+```
+
 Replace a marker block in a PR body:
 
 ```sh
@@ -66,6 +74,13 @@ Preview a write without updating GitHub:
 
 ```sh
 gh-prx body write 123 --marker section --file section.md --dry-run
+```
+
+Preview and replace an existing PR body line range:
+
+```sh
+gh-prx body lines 123 --range 12:18 --file section.md --dry-run
+gh-prx body lines 123 --range 12:18 --file section.md --expect-sha <body_sha>
 ```
 
 Read or update PR comments:
@@ -89,6 +104,18 @@ in when insertion is intended:
 
 ```sh
 gh-prx body write 123 --marker section --file section.md --insert-if-missing
+```
+
+Marker blocks are the preferred long-lived target because they survive unrelated
+body edits. Line-range replacement is intended as an escape hatch for existing
+PR bodies. A real `body lines` update requires one of `--expect-sha`,
+`--expect-file`, or `--force`; `--dry-run` remains available without a guard so
+humans and agents can inspect the exact replacement first.
+
+```sh
+gh-prx body read 123 --range 12:18 --json
+gh-prx body lines 123 --range 12:18 --file section.md --expect-sha <body_sha>
+gh-prx body lines 123 --range 12:18 --file section.md --expect-file old-section.md
 ```
 
 For marker-based comment reads, if multiple comments contain the same marker,

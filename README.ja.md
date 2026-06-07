@@ -13,6 +13,7 @@
 ```
 
 GitHub API 上は Markdown field 全体を更新しますが、`gh-prx` は利用者から見える操作を名前付き read/write ブロックとして扱い、write の前後に diff を表示します。
+まだ marker が入っていない既存の PR body 向けには、expectation guard 付きで明示的な行範囲を差し替えることもできます。
 
 ## Install
 
@@ -47,6 +48,12 @@ gh-prx body read 123 --marker section
 gh-prx body read 123 --marker section --plain
 ```
 
+PR body の行範囲を読み取り、現在内容の hash を取得する:
+
+```sh
+gh-prx body read 123 --range 12:18 --json
+```
+
 PR body の marker block を差し替える:
 
 ```sh
@@ -58,6 +65,13 @@ GitHub を更新せずに write 結果をプレビューする:
 
 ```sh
 gh-prx body write 123 --marker section --file section.md --dry-run
+```
+
+既存の PR body の行範囲を preview / 差し替えする:
+
+```sh
+gh-prx body lines 123 --range 12:18 --file section.md --dry-run
+gh-prx body lines 123 --range 12:18 --file section.md --expect-sha <body_sha>
 ```
 
 PR comment を読み取り・更新する:
@@ -80,6 +94,14 @@ gh-prx comment write 123 --comment-id 123456 --whole --file comment.md
 
 ```sh
 gh-prx body write 123 --marker section --file section.md --insert-if-missing
+```
+
+長期的に管理する対象には、周辺の本文編集に強い marker block を推奨します。line-range replacement は、まだ marker がない既存 PR body のための escape hatch です。実際に `body lines` で更新する場合は、`--expect-sha`、`--expect-file`、`--force` のいずれかが必須です。`--dry-run` は guard なしで実行できるため、人間や agent が先に差し替え内容を確認できます。
+
+```sh
+gh-prx body read 123 --range 12:18 --json
+gh-prx body lines 123 --range 12:18 --file section.md --expect-sha <body_sha>
+gh-prx body lines 123 --range 12:18 --file section.md --expect-file old-section.md
 ```
 
 marker 指定で comment を読む場合に複数の comment が同じ marker を含んでいると、`gh-prx` は暗黙に1つを選ばず、retry 用の candidate comment ID を表示します。`comment upsert` はより狭く、current GitHub user が作成した marker comment だけを対象にします。marker-scoped write として retry する場合は、marker も明示してください。

@@ -1,6 +1,7 @@
 package prx
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -17,6 +18,7 @@ type commandResult struct {
 	PullNumber int      `json:"pull_number,omitempty"`
 	CommentID  int64    `json:"comment_id,omitempty"`
 	Marker     string   `json:"marker,omitempty"`
+	Range      string   `json:"range,omitempty"`
 	Updated    bool     `json:"updated"`
 	Changed    bool     `json:"changed"`
 	DryRun     bool     `json:"dry_run"`
@@ -93,8 +95,10 @@ func runBody(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) 
 		return runBodyRead(args[1:], stdout, gh)
 	case "write", "patch":
 		return runBodyWrite(args[1:], stdin, stdout, gh)
+	case "lines":
+		return runBodyLines(args[1:], stdin, stdout, gh)
 	default:
-		return ExitValidationError, validationError("unknown body command: "+args[0], "Use: gh-prx body read ... or gh-prx body write ...", "gh-prx body --help")
+		return ExitValidationError, validationError("unknown body command: "+args[0], "Use: gh-prx body read, write, or lines.", "gh-prx body --help")
 	}
 }
 
@@ -102,20 +106,25 @@ func runBodyRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) 
 	fs := flag.NewFlagSet("body read", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	marker := fs.String("marker", "", "HTML comment marker name")
+	lineRange := fs.String("range", "", "1-based inclusive body line range, such as 12:18")
 	plain := fs.Bool("plain", false, "print only marker content")
 	jsonOut := fs.Bool("json", false, "print JSON")
 	if err := parseFlagSet(fs, args); err != nil {
-		return ExitValidationError, validationError(err.Error(), "Use a PR number and optional --marker.", "gh-prx body read 123 --marker section")
+		return ExitValidationError, validationError(err.Error(), "Use a PR number and optional --marker or --range.", "gh-prx body read 123 --range 12:18")
 	}
 	prNumber, err := onePRNumber(fs.Args(), "body read")
 	if err != nil {
 		return ExitValidationError, err
+	}
+	if *marker != "" && *lineRange != "" {
+		return ExitValidationError, validationError("conflicting flags: --marker and --range", "Read either a named marker block or a body line range.", "gh-prx body read 123 --range 12:18")
 	}
 	pr, err := gh.GetPullRequest(prNumber)
 	if err != nil {
 		return ExitGitHubAPIError, apiError(err)
 	}
 	output := pr.Body
+	sha := ""
 	if *marker != "" {
 		output, err = readMarker(pr.Body, *marker, *plain)
 		if err != nil {
@@ -125,11 +134,24 @@ func runBodyRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) 
 			return ExitMarkerNotFound, markerError("body", prNumber, *marker, "")
 		}
 	}
+	if *lineRange != "" {
+		rng, err := parseLineRange(*lineRange)
+		if err != nil {
+			return ExitValidationError, err
+		}
+		output, err = readBodyLineRange(pr.Body, rng)
+		if err != nil {
+			return ExitValidationError, err
+		}
+		sha = contentSHA(output)
+	}
 	if *jsonOut {
 		writeJSON(stdout, map[string]any{
 			"target":      "pull_request_body",
 			"pull_number": prNumber,
 			"marker":      *marker,
+			"range":       *lineRange,
+			"body_sha":    sha,
 			"body":        output,
 			"url":         pr.URL,
 		})
@@ -140,6 +162,64 @@ func runBodyRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) 
 		fmt.Fprintln(stdout)
 	}
 	return ExitSuccess, nil
+}
+
+func runBodyLines(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
+	fs := flag.NewFlagSet("body lines", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	lineRange := fs.String("range", "", "1-based inclusive body line range, such as 12:18")
+	file := fs.String("file", "", "read replacement content from file")
+	expectSHA := fs.String("expect-sha", "", "expected SHA-256 of the currently selected lines")
+	expectFile := fs.String("expect-file", "", "file containing the currently selected lines")
+	force := fs.Bool("force", false, "update without an expectation guard")
+	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	yes := fs.Bool("yes", false, "run non-interactively")
+	if err := parseFlagSet(fs, args); err != nil {
+		return ExitValidationError, validationError(err.Error(), "Use a PR number, --range, and --file or -.", "gh-prx body lines 123 --range 12:18 --file section.md --dry-run")
+	}
+	_ = yes
+	prNumber, inputPath, err := writeTarget(fs.Args(), "body lines")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	if *lineRange == "" {
+		return ExitValidationError, validationError("missing required flag: --range", "Choose the 1-based inclusive PR body line range to replace.", "gh-prx body lines 123 --range 12:18 --file section.md --dry-run")
+	}
+	if !*dryRun && !*force && *expectSHA == "" && *expectFile == "" {
+		return ExitValidationError, validationError("missing update guard: --expect-sha, --expect-file, or --force", "Read the range first and pass the returned body_sha, or pass --force when overwriting by line number is intended.", "gh-prx body read 123 --range "+*lineRange+" --json")
+	}
+	rng, err := parseLineRange(*lineRange)
+	if err != nil {
+		return ExitValidationError, err
+	}
+	replacement, err := readInput(stdin, inputPath, *file)
+	if err != nil {
+		return ExitValidationError, err
+	}
+	pr, err := gh.GetPullRequest(prNumber)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	newBody, oldContent, newContent, err := replaceBodyLineRange(pr.Body, rng, replacement)
+	if err != nil {
+		return ExitValidationError, err
+	}
+	if err := validateLineRangeGuards(oldContent, *expectSHA, *expectFile); err != nil {
+		return ExitValidationError, err
+	}
+	diff := renderBodyRangeDiff(*lineRange, oldContent, newContent)
+	if newBody == pr.Body {
+		return writeNoChanges(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Range: *lineRange, URL: pr.URL})
+	}
+	if *dryRun {
+		return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Range: *lineRange, Updated: false, Changed: true, DryRun: true, URL: pr.URL, Message: diff}, diff)
+	}
+	updated, err := gh.UpdatePullRequestBody(prNumber, newBody)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Range: *lineRange, Updated: true, Changed: true, URL: updated.URL, Message: diff}, diff)
 }
 
 func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
@@ -512,6 +592,94 @@ func matchingCurrentUserComments(gh GitHubClient, prNumber int, marker string) (
 	return owned, nil
 }
 
+type lineRange struct {
+	Start int
+	End   int
+}
+
+func parseLineRange(value string) (lineRange, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return lineRange{}, validationError("invalid range: "+value, "Use a 1-based inclusive range in start:end form.", "gh-prx body read 123 --range 12:18")
+	}
+	start, err := strconv.Atoi(parts[0])
+	if err != nil || start <= 0 {
+		return lineRange{}, validationError("invalid range start: "+parts[0], "Use a positive 1-based start line.", "gh-prx body read 123 --range 12:18")
+	}
+	end, err := strconv.Atoi(parts[1])
+	if err != nil || end <= 0 {
+		return lineRange{}, validationError("invalid range end: "+parts[1], "Use a positive 1-based end line.", "gh-prx body read 123 --range 12:18")
+	}
+	if start > end {
+		return lineRange{}, validationError("invalid range: start is after end", "Use a range where start is less than or equal to end.", "gh-prx body read 123 --range 12:18")
+	}
+	return lineRange{Start: start, End: end}, nil
+}
+
+func readBodyLineRange(body string, rng lineRange) (string, error) {
+	lines, _ := bodyLines(body)
+	if len(lines) == 0 {
+		return "", validationError("body is empty", "Choose a PR body that has lines to read.", "gh-prx body read 123")
+	}
+	if rng.End > len(lines) {
+		return "", validationError("range exceeds body length", fmt.Sprintf("The PR body has %d lines; choose a range inside it.", len(lines)), "gh-prx body read 123")
+	}
+	return strings.Join(lines[rng.Start-1:rng.End], "\n"), nil
+}
+
+func replaceBodyLineRange(body string, rng lineRange, replacement string) (string, string, string, error) {
+	lines, hadFinalNewline := bodyLines(body)
+	if len(lines) == 0 {
+		return "", "", "", validationError("body is empty", "Choose a PR body that has lines to replace.", "gh-prx body lines 123 --range 1:1 --file section.md --dry-run")
+	}
+	if rng.End > len(lines) {
+		return "", "", "", validationError("range exceeds body length", fmt.Sprintf("The PR body has %d lines; choose a range inside it.", len(lines)), "gh-prx body read 123")
+	}
+	oldContent := strings.Join(lines[rng.Start-1:rng.End], "\n")
+	newContent := strings.TrimSuffix(replacement, "\n")
+	replacementLines := splitLines(replacement)
+	newLines := make([]string, 0, len(lines)-(rng.End-rng.Start+1)+len(replacementLines))
+	newLines = append(newLines, lines[:rng.Start-1]...)
+	newLines = append(newLines, replacementLines...)
+	newLines = append(newLines, lines[rng.End:]...)
+	newBody := strings.Join(newLines, "\n")
+	if hadFinalNewline && newBody != "" {
+		newBody += "\n"
+	}
+	return newBody, oldContent, newContent, nil
+}
+
+func bodyLines(body string) ([]string, bool) {
+	hadFinalNewline := strings.HasSuffix(body, "\n")
+	body = strings.TrimSuffix(body, "\n")
+	if body == "" {
+		return nil, hadFinalNewline
+	}
+	return strings.Split(body, "\n"), hadFinalNewline
+}
+
+func validateLineRangeGuards(oldContent, expectSHA, expectFile string) error {
+	if expectSHA != "" && expectSHA != contentSHA(oldContent) {
+		return validationError("line range expectation failed: --expect-sha does not match", "Read the range again and retry with the current body_sha.", "gh-prx body read 123 --range 12:18 --json")
+	}
+	if expectFile == "" {
+		return nil
+	}
+	data, err := os.ReadFile(expectFile)
+	if err != nil {
+		return validationError("cannot read expect file: "+expectFile, "Check that the expected-content file exists and is readable.", "gh-prx body lines 123 --range 12:18 --expect-file old.md --file new.md")
+	}
+	if strings.TrimSuffix(string(data), "\n") != oldContent {
+		return validationError("line range expectation failed: --expect-file does not match", "Read the range again and update the expected-content file before retrying.", "gh-prx body read 123 --range 12:18")
+	}
+	return nil
+}
+
+func contentSHA(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", sum[:])
+}
+
 func onePRNumber(args []string, command string) (int, error) {
 	if len(args) != 1 {
 		return 0, validationError("expected exactly one PR number for "+command, "Pass the pull request number as the first positional argument.", "gh-prx "+command+" 123 --marker section")
@@ -741,9 +909,12 @@ func parseFlagSet(fs *flag.FlagSet, args []string) error {
 
 func validateValueFlags(args []string) error {
 	valueFlags := map[string]bool{
-		"--marker":     true,
-		"--file":       true,
-		"--comment-id": true,
+		"--marker":      true,
+		"--file":        true,
+		"--comment-id":  true,
+		"--range":       true,
+		"--expect-sha":  true,
+		"--expect-file": true,
 	}
 	for i, arg := range args {
 		name := arg
@@ -764,9 +935,12 @@ func validateValueFlags(args []string) error {
 
 func normalizeFlags(args []string) []string {
 	valueFlags := map[string]bool{
-		"--marker":     true,
-		"--file":       true,
-		"--comment-id": true,
+		"--marker":      true,
+		"--file":        true,
+		"--comment-id":  true,
+		"--range":       true,
+		"--expect-sha":  true,
+		"--expect-file": true,
 	}
 	var flags []string
 	var positionals []string
@@ -800,7 +974,10 @@ func rootHelp() string {
 Examples:
   %[1]s body read 123 --marker section
   %[1]s body read 123 --marker section --plain
+  %[1]s body read 123 --range 12:18 --json
   %[1]s body write 123 --marker section --file section.md --dry-run
+  %[1]s body lines 123 --range 12:18 --file section.md --dry-run
+  %[1]s body lines 123 --range 12:18 --file section.md --expect-sha <body_sha>
   cat section.md | %[1]s body write 123 --marker section -
   %[1]s comment read 123 --marker section
   %[1]s comment write 123 --comment-id 123456 --marker section --file section.md
@@ -823,8 +1000,11 @@ func bodyHelp() string {
 	return fmt.Sprintf(`Examples:
   %[1]s body read 123 --marker section
   %[1]s body read 123 --marker section --plain
+  %[1]s body read 123 --range 12:18 --json
   %[1]s body write 123 --marker section --file section.md
   %[1]s body write 123 --marker section --file section.md --dry-run
+  %[1]s body lines 123 --range 12:18 --file section.md --dry-run
+  %[1]s body lines 123 --range 12:18 --file section.md --expect-sha <body_sha>
   cat section.md | %[1]s body write 123 --marker section -
 `, cmd)
 }

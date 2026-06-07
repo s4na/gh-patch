@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
+
+const twoThreeSHA = "43fc3d02ea6e854a19e994c75467d8163dde2464c83a12a5c56c59f47f75e253"
 
 type fakeGitHub struct {
 	pr               PullRequest
@@ -284,6 +287,141 @@ func TestBodyWriteJSONReportsStructuredResult(t *testing.T) {
 	}
 	if result.Target != "pull_request_body" || result.PullNumber != 123 || result.Marker != "section" || !result.Updated || !result.Changed {
 		t.Fatalf("result = %+v, want updated pull_request_body for PR 123 marker section", result)
+	}
+}
+
+func TestBodyReadRangeJSONReportsBodySHA(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "one\ntwo\nthree\nfour\n", URL: "https://example.test/pr/123"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "read", "123", "--range", "2:3", "--json"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
+	}
+	var result struct {
+		Target     string `json:"target"`
+		PullNumber int    `json:"pull_number"`
+		Range      string `json:"range"`
+		BodySHA    string `json:"body_sha"`
+		Body       string `json:"body"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v; stdout=%s", err, stdout.String())
+	}
+	if result.Target != "pull_request_body" || result.PullNumber != 123 || result.Range != "2:3" || result.Body != "two\nthree" {
+		t.Fatalf("result = %+v, want selected PR body lines", result)
+	}
+	if result.BodySHA != twoThreeSHA {
+		t.Fatalf("body_sha = %q, want current line-range sha", result.BodySHA)
+	}
+}
+
+func TestBodyLinesDryRunAllowsUnguardedPreview(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "one\ntwo\nthree\nfour\n", URL: "https://example.test/pr/123"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "lines", "123", "--range", "2:3", "-", "--dry-run"}, strings.NewReader("new two\nnew three\n"), &stdout, &stderr, gh)
+
+	if code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
+	}
+	if gh.updatedPRBody != "" {
+		t.Fatalf("dry-run updated PR body: %q", gh.updatedPRBody)
+	}
+	out := stdout.String()
+	for _, want := range []string{"body lines 2:3", " - |    1 | two", " - |    2 | three", " + |    1 | new two", " + |    2 | new three"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want to contain %q", out, want)
+		}
+	}
+}
+
+func TestBodyLinesRequiresGuardForRealUpdate(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "one\ntwo\nthree\nfour\n"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "lines", "123", "--range", "2:3", "-"}, strings.NewReader("replacement\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "missing update guard") {
+		t.Fatalf("stderr = %q, want missing update guard", stderr.String())
+	}
+	if gh.updatedPRBody != "" {
+		t.Fatalf("unguarded line update changed PR body: %q", gh.updatedPRBody)
+	}
+}
+
+func TestBodyLinesUpdatesRangeWhenExpectSHAMatches(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "one\ntwo\nthree\nfour\n", URL: "https://example.test/pr/123"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "lines", "123", "--range", "2:3", "--expect-sha", twoThreeSHA, "-"}, strings.NewReader("new two\nnew three\n"), &stdout, &stderr, gh)
+
+	if code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
+	}
+	want := "one\nnew two\nnew three\nfour\n"
+	if gh.updatedPRBody != want {
+		t.Fatalf("updated PR body = %q, want %q", gh.updatedPRBody, want)
+	}
+}
+
+func TestBodyLinesRejectsStaleExpectSHA(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "one\ntwo changed\nthree\nfour\n"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "lines", "123", "--range", "2:3", "--expect-sha", twoThreeSHA, "-"}, strings.NewReader("new\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "--expect-sha does not match") {
+		t.Fatalf("stderr = %q, want stale sha error", stderr.String())
+	}
+	if gh.updatedPRBody != "" {
+		t.Fatalf("stale sha updated PR body: %q", gh.updatedPRBody)
+	}
+}
+
+func TestBodyLinesValidatesExpectFile(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "one\ntwo\nthree\n"}}
+	expectFile := t.TempDir() + "/old.md"
+	if err := os.WriteFile(expectFile, []byte("two\n"), 0o600); err != nil {
+		t.Fatalf("write expect file: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "lines", "123", "--range", "2:2", "--expect-file", expectFile, "-"}, strings.NewReader("new two\n"), &stdout, &stderr, gh)
+
+	if code != ExitSuccess {
+		t.Fatalf("exit code = %d, want %d; stderr=%s", code, ExitSuccess, stderr.String())
+	}
+	if gh.updatedPRBody != "one\nnew two\nthree\n" {
+		t.Fatalf("updated PR body = %q, want selected line replaced", gh.updatedPRBody)
+	}
+}
+
+func TestBodyLinesRejectsStaleExpectFile(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "one\ntwo changed\nthree\n"}}
+	expectFile := t.TempDir() + "/old.md"
+	if err := os.WriteFile(expectFile, []byte("two\n"), 0o600); err != nil {
+		t.Fatalf("write expect file: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "lines", "123", "--range", "2:2", "--expect-file", expectFile, "-"}, strings.NewReader("new two\n"), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "--expect-file does not match") {
+		t.Fatalf("stderr = %q, want stale expect-file error", stderr.String())
+	}
+	if gh.updatedPRBody != "" {
+		t.Fatalf("stale expect-file updated PR body: %q", gh.updatedPRBody)
 	}
 }
 

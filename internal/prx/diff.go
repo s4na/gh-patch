@@ -14,6 +14,10 @@ func renderWholeDiff(oldContent, newContent string) string {
 	return renderLineDiff(oldContent, newContent)
 }
 
+func renderBodyRangeDiff(lineRange, oldContent, newContent string) string {
+	return "body lines " + lineRange + "\n" + renderLineDiff(oldContent, newContent)
+}
+
 func renderLineDiff(oldContent, newContent string) string {
 	oldLines := splitLines(oldContent)
 	newLines := splitLines(newContent)
