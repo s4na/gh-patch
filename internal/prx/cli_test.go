@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -284,6 +285,45 @@ func TestJSONErrorsUseConfiguredCommandName(t *testing.T) {
 	}
 }
 
+func TestConfiguredCommandNameDoesNotRewriteMarkerNames(t *testing.T) {
+	t.Setenv("GH_PRX_COMMAND_NAME", "gh patch")
+	gh := &fakeGitHub{expectedPRNumber: 123, pr: PullRequest{Number: 123, Body: "plain body"}}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "write", "123", "--marker", "gh-prx-summary", "-"}, strings.NewReader("section\n"), &stdout, &stderr, gh)
+
+	if code != ExitMarkerNotFound {
+		t.Fatalf("exit code = %d, want %d", code, ExitMarkerNotFound)
+	}
+	errText := stderr.String()
+	if !strings.Contains(errText, "<!-- gh-prx-summary:start -->") {
+		t.Fatalf("stderr = %q, want marker name preserved", errText)
+	}
+	if strings.Contains(errText, "gh patch-summary") {
+		t.Fatalf("stderr = %q, marker name should not be rewritten", errText)
+	}
+	if !strings.Contains(errText, "gh patch body write 123 --marker gh-prx-summary --file section.md --insert-if-missing") {
+		t.Fatalf("stderr = %q, want only command prefix rewritten", errText)
+	}
+}
+
+func TestGhPatchBinaryNameDisplaysGhPatchCommand(t *testing.T) {
+	originalArgs := os.Args
+	os.Args = []string{filepath.Join(t.TempDir(), "gh-patch")}
+	t.Cleanup(func() { os.Args = originalArgs })
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "nope", "123"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	if !strings.Contains(stderr.String(), "gh patch body --help") {
+		t.Fatalf("stderr = %q, want gh patch command display", stderr.String())
+	}
+}
+
 func TestBodyWriteRejectsFileAndStdinTogether(t *testing.T) {
 	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
 	var stdout, stderr bytes.Buffer
@@ -298,6 +338,24 @@ func TestBodyWriteRejectsFileAndStdinTogether(t *testing.T) {
 	}
 	if gh.updatedPRBody != "" {
 		t.Fatalf("duplicate input updated PR body: %q", gh.updatedPRBody)
+	}
+}
+
+func TestCommentWriteMissingInputUsesCommentRetry(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"comment", "write", "123", "--comment-id", "111", "--marker", "section"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	errText := stderr.String()
+	if !strings.Contains(errText, "gh-prx comment write 123 --comment-id 111 --marker section --file section.md") {
+		t.Fatalf("stderr = %q, want comment-specific retry", errText)
+	}
+	if strings.Contains(errText, "body write") {
+		t.Fatalf("stderr = %q, should not use body write retry", errText)
 	}
 }
 

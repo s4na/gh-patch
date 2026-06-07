@@ -33,9 +33,9 @@ GitHub CLI derives the extension command from the repository name, so this
 repository is exposed as `gh patch ...`. To use the command exactly as
 `gh-prx ...`, publish the same binary from a `gh-prx` extension repository.
 This repository also includes a root `gh-patch` wrapper for source-based gh
-extension installs. This source-based extension path runs `go run` and requires
-a local Go toolchain. Use the Homebrew or `go install` paths below when you want
-an installed binary.
+extension installs. This source-based extension path builds and caches the
+`gh-patch` binary on first run, so it requires a local Go toolchain. Use the
+Homebrew or `go install` paths below when you want an installed binary.
 
 With Homebrew after releases are published to the tap:
 

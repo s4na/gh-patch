@@ -2,6 +2,13 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-export GH_PRX_COMMAND_NAME="gh patch"
 cd "$root"
-exec go run ./cmd/gh-patch "$@"
+bin="${XDG_CACHE_HOME:-$HOME/.cache}/gh-patch/gh-patch"
+src="$root/cmd/gh-patch/main.go"
+
+if [ ! -x "$bin" ] || [ "$src" -nt "$bin" ]; then
+  mkdir -p "$(dirname -- "$bin")"
+  go build -o "$bin" ./cmd/gh-patch
+fi
+
+exec "$bin" "$@"

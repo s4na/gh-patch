@@ -54,6 +54,8 @@ checksum:
 
 brews:
   - name: gh-prx
+    ids:
+      - default
     repository:
       owner: s4na
       name: homebrew-tap

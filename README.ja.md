@@ -24,7 +24,7 @@ gh extension install s4na/gh-patch
 gh patch body read 123 --marker section
 ```
 
-GitHub CLI はリポジトリ名から extension command を決めるため、このリポジトリは `gh patch ...` として公開されます。コマンドを正確に `gh-prx ...` として使いたい場合は、同じ binary を `gh-prx` extension repository から公開してください。このリポジトリには、source-based gh extension install 用の root `gh-patch` wrapper も含まれています。この source-based extension は `go run` で起動するため、ローカルの Go toolchain が必要です。installed binary として使いたい場合は、下の Homebrew または `go install` の手順を使ってください。
+GitHub CLI はリポジトリ名から extension command を決めるため、このリポジトリは `gh patch ...` として公開されます。コマンドを正確に `gh-prx ...` として使いたい場合は、同じ binary を `gh-prx` extension repository から公開してください。このリポジトリには、source-based gh extension install 用の root `gh-patch` wrapper も含まれています。この source-based extension は初回実行時に `gh-patch` binary を build/cache するため、ローカルの Go toolchain が必要です。installed binary として使いたい場合は、下の Homebrew または `go install` の手順を使ってください。
 
 tap へ release された後に Homebrew でインストールする場合:
 

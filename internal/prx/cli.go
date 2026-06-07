@@ -193,7 +193,7 @@ func runBodyLines(args []string, stdin io.Reader, stdout io.Writer, gh GitHubCli
 	if err != nil {
 		return ExitValidationError, err
 	}
-	replacement, err := readInput(stdin, inputPath, *file)
+	replacement, err := readInput(stdin, inputPath, *file, "gh-prx body lines "+strconv.Itoa(prNumber)+" --range "+*lineRange+" --file section.md")
 	if err != nil {
 		return ExitValidationError, err
 	}
@@ -242,7 +242,7 @@ func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubCli
 	if *marker == "" {
 		return ExitValidationError, validationError("missing required flag: --marker", "Choose the named marker block to update.", "gh-prx body write 123 --marker section --file section.md")
 	}
-	replacement, err := readInput(stdin, inputPath, *file)
+	replacement, err := readInput(stdin, inputPath, *file, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
 	if err != nil {
 		return ExitValidationError, err
 	}
@@ -379,7 +379,13 @@ func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHub
 	if *whole && *insert {
 		return ExitValidationError, validationError("conflicting flags: --whole and --insert-if-missing", "--insert-if-missing only applies to marker block updates.", "gh-prx comment write 123 --comment-id 123456 --whole --file comment.md")
 	}
-	replacement, err := readInput(stdin, inputPath, *file)
+	readRetry := "gh-prx comment write " + strconv.Itoa(prNumber) + " --comment-id " + strconv.FormatInt(*commentID, 10)
+	if *whole {
+		readRetry += " --whole --file comment.md"
+	} else {
+		readRetry += " --marker " + *marker + " --file section.md"
+	}
+	replacement, err := readInput(stdin, inputPath, *file, readRetry)
 	if err != nil {
 		return ExitValidationError, err
 	}
@@ -449,7 +455,7 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 	if *marker == "" {
 		return ExitValidationError, validationError("missing required flag: --marker", "Upsert needs a marker to find or create the managed comment.", "gh-prx comment upsert 123 --marker section --file section.md")
 	}
-	replacement, err := readInput(stdin, inputPath, *file)
+	replacement, err := readInput(stdin, inputPath, *file, "gh-prx comment upsert "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
 	if err != nil {
 		return ExitValidationError, err
 	}
@@ -706,39 +712,39 @@ func writeTarget(args []string, command string) (int, string, error) {
 	return prNumber, inputPath, nil
 }
 
-func readInput(stdin io.Reader, positionalPath, fileFlag string) (string, error) {
+func readInput(stdin io.Reader, positionalPath, fileFlag, retry string) (string, error) {
 	if positionalPath != "" && fileFlag != "" {
-		return "", validationError("input specified twice", "Use either --file path or '-' for stdin, not both.", "gh-prx body write 123 --marker section --file section.md")
+		return "", validationError("input specified twice", "Use either --file path or '-' for stdin, not both.", retry)
 	}
 	if fileFlag == "-" {
 		data, err := io.ReadAll(stdin)
 		if err != nil {
-			return "", validationError("cannot read stdin", "Pipe content into the command.", "cat section.md | gh-prx body write 123 --marker section --file -")
+			return "", validationError("cannot read stdin", "Pipe content into the command.", strings.Replace(retry, "--file section.md", "--file -", 1))
 		}
 		return string(data), nil
 	}
 	if fileFlag != "" {
 		data, err := os.ReadFile(fileFlag)
 		if err != nil {
-			return "", validationError("cannot read file: "+fileFlag, "Check that the file exists and is readable.", "gh-prx body write 123 --marker section --file "+fileFlag)
+			return "", validationError("cannot read file: "+fileFlag, "Check that the file exists and is readable.", strings.Replace(retry, "--file section.md", "--file "+fileFlag, 1))
 		}
 		return string(data), nil
 	}
 	if positionalPath == "-" {
 		data, err := io.ReadAll(stdin)
 		if err != nil {
-			return "", validationError("cannot read stdin", "Pipe content into the command.", "cat section.md | gh-prx body write 123 --marker section -")
+			return "", validationError("cannot read stdin", "Pipe content into the command.", retry+" -")
 		}
 		return string(data), nil
 	}
 	if positionalPath != "" {
 		data, err := os.ReadFile(positionalPath)
 		if err != nil {
-			return "", validationError("cannot read file: "+positionalPath, "Check that the file exists and is readable.", "gh-prx body write 123 --marker section --file "+positionalPath)
+			return "", validationError("cannot read file: "+positionalPath, "Check that the file exists and is readable.", strings.Replace(retry, "--file section.md", "--file "+positionalPath, 1))
 		}
 		return string(data), nil
 	}
-	return "", validationError("missing input", "Pass replacement content with --file path or '-'.", "gh-prx body write 123 --marker section --file section.md")
+	return "", validationError("missing input", "Pass replacement content with --file path or '-'.", retry)
 }
 
 func writeSuccess(stdout io.Writer, jsonOut bool, result commandResult, text string) (int, error) {
@@ -804,7 +810,13 @@ func displayCommand(text string) string {
 	if cmd == "gh-prx" || text == "" {
 		return text
 	}
-	return strings.ReplaceAll(text, "gh-prx", cmd)
+	if text == "gh-prx" {
+		return cmd
+	}
+	if strings.HasPrefix(text, "gh-prx ") {
+		return cmd + strings.TrimPrefix(text, "gh-prx")
+	}
+	return strings.ReplaceAll(text, "gh-prx ", cmd+" ")
 }
 
 func errorCode(err error) int {
@@ -1046,7 +1058,7 @@ func commandName() string {
 	}
 	switch filepath.Base(os.Args[0]) {
 	case "gh-patch":
-		return "gh-patch"
+		return "gh patch"
 	case "gh-prx":
 		return "gh-prx"
 	}
