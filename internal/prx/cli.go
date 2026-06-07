@@ -1,0 +1,1091 @@
+package prx
+
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+type commandResult struct {
+	Target     string   `json:"target"`
+	PullNumber int      `json:"pull_number,omitempty"`
+	CommentID  int64    `json:"comment_id,omitempty"`
+	Marker     string   `json:"marker,omitempty"`
+	Range      string   `json:"range,omitempty"`
+	Updated    bool     `json:"updated"`
+	Changed    bool     `json:"changed"`
+	DryRun     bool     `json:"dry_run"`
+	URL        string   `json:"url,omitempty"`
+	Message    string   `json:"message,omitempty"`
+	ExitCode   int      `json:"exit_code,omitempty"`
+	Error      string   `json:"error,omitempty"`
+	ErrorKind  string   `json:"error_kind,omitempty"`
+	Fix        []string `json:"fix,omitempty"`
+	Retry      string   `json:"retry,omitempty"`
+}
+
+type appError struct {
+	Code    int
+	Kind    string
+	Message string
+	Fix     []string
+	Retry   string
+}
+
+func (e appError) Error() string {
+	return e.Message
+}
+
+func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, gh GitHubClient) int {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+		fmt.Fprint(stdout, rootHelp())
+		return ExitSuccess
+	}
+
+	code, err := dispatch(args, stdin, stdout, gh)
+	if err == nil {
+		return code
+	}
+	jsonOutput := hasFlag(args, "--json")
+	if jsonOutput {
+		result := commandResult{Error: err.Error(), ErrorKind: errorKind(err), ExitCode: errorCode(err)}
+		var app appError
+		if errors.As(err, &app) {
+			result.Fix = displayFixes(app.Fix)
+			result.Retry = displayCommand(app.Retry)
+		}
+		writeJSON(stdout, result)
+	} else {
+		writeError(stderr, err)
+	}
+	return errorCode(err)
+}
+
+func dispatch(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
+	switch args[0] {
+	case "body":
+		return runBody(args[1:], stdin, stdout, gh)
+	case "comment":
+		return runComment(args[1:], stdin, stdout, gh)
+	default:
+		return ExitValidationError, appError{
+			Code:    ExitValidationError,
+			Kind:    "validation_error",
+			Message: "unknown command: " + args[0],
+			Fix:     []string{"Use one of: body, comment."},
+			Retry:   "gh-prx --help",
+		}
+	}
+}
+
+func runBody(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprint(stdout, bodyHelp())
+		return ExitSuccess, nil
+	}
+	switch args[0] {
+	case "read":
+		return runBodyRead(args[1:], stdout, gh)
+	case "write", "patch":
+		return runBodyWrite(args[1:], stdin, stdout, gh)
+	case "lines":
+		return runBodyLines(args[1:], stdin, stdout, gh)
+	default:
+		return ExitValidationError, validationError("unknown body command: "+args[0], "Use: gh-prx body read, write, or lines.", "gh-prx body --help")
+	}
+}
+
+func runBodyRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) {
+	fs := flag.NewFlagSet("body read", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	marker := fs.String("marker", "", "HTML comment marker name")
+	lineRange := fs.String("range", "", "1-based inclusive body line range, such as 12:18")
+	plain := fs.Bool("plain", false, "print only marker content")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	if err := parseFlagSet(fs, args); err != nil {
+		return ExitValidationError, validationError(err.Error(), "Use a PR number and optional --marker or --range.", "gh-prx body read 123 --range 12:18")
+	}
+	prNumber, err := onePRNumber(fs.Args(), "body read")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	if *marker != "" && *lineRange != "" {
+		return ExitValidationError, validationError("conflicting flags: --marker and --range", "Read either a named marker block or a body line range.", "gh-prx body read 123 --range 12:18")
+	}
+	if err := validateMarkerName(*marker); err != nil {
+		return ExitValidationError, err
+	}
+	pr, err := gh.GetPullRequest(prNumber)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	output := pr.Body
+	sha := ""
+	if *marker != "" {
+		output, err = readMarker(pr.Body, *marker, *plain)
+		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return ExitAmbiguousTarget, ambiguousMarkerError("body", prNumber, *marker)
+			}
+			return ExitMarkerNotFound, markerError("body", prNumber, *marker, "")
+		}
+	}
+	if *lineRange != "" {
+		rng, err := parseLineRange(*lineRange)
+		if err != nil {
+			return ExitValidationError, err
+		}
+		output, err = readBodyLineRange(pr.Body, rng)
+		if err != nil {
+			return ExitValidationError, err
+		}
+		sha = contentSHA(output)
+	}
+	if *jsonOut {
+		writeJSON(stdout, map[string]any{
+			"target":      "pull_request_body",
+			"pull_number": prNumber,
+			"marker":      *marker,
+			"range":       *lineRange,
+			"body_sha":    sha,
+			"body":        output,
+			"url":         pr.URL,
+		})
+		return ExitSuccess, nil
+	}
+	fmt.Fprint(stdout, output)
+	if output != "" && !strings.HasSuffix(output, "\n") {
+		fmt.Fprintln(stdout)
+	}
+	return ExitSuccess, nil
+}
+
+func runBodyLines(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
+	fs := flag.NewFlagSet("body lines", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	lineRange := fs.String("range", "", "1-based inclusive body line range, such as 12:18")
+	file := fs.String("file", "", "read replacement content from file")
+	expectSHA := fs.String("expect-sha", "", "expected SHA-256 of the currently selected lines")
+	expectFile := fs.String("expect-file", "", "file containing the currently selected lines")
+	force := fs.Bool("force", false, "update without an expectation guard")
+	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	yes := fs.Bool("yes", false, "run non-interactively")
+	if err := parseFlagSet(fs, args); err != nil {
+		return ExitValidationError, validationError(err.Error(), "Use a PR number, --range, and --file or -.", "gh-prx body lines 123 --range 12:18 --file section.md --dry-run")
+	}
+	_ = yes
+	prNumber, inputPath, err := writeTarget(fs.Args(), "body lines")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	if *lineRange == "" {
+		return ExitValidationError, validationError("missing required flag: --range", "Choose the 1-based inclusive PR body line range to replace.", "gh-prx body lines 123 --range 12:18 --file section.md --dry-run")
+	}
+	if !*dryRun && !*force && *expectSHA == "" && *expectFile == "" {
+		return ExitValidationError, validationError("missing update guard: --expect-sha, --expect-file, or --force", "Read the range first and pass the returned body_sha, or pass --force when overwriting by line number is intended.", "gh-prx body read 123 --range "+*lineRange+" --json")
+	}
+	rng, err := parseLineRange(*lineRange)
+	if err != nil {
+		return ExitValidationError, err
+	}
+	replacement, err := readInput(stdin, inputPath, *file, "gh-prx body lines "+strconv.Itoa(prNumber)+" --range "+*lineRange+" --file section.md")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	pr, err := gh.GetPullRequest(prNumber)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	newBody, oldContent, newContent, err := replaceBodyLineRange(pr.Body, rng, replacement)
+	if err != nil {
+		return ExitValidationError, err
+	}
+	if err := validateLineRangeGuards(oldContent, *expectSHA, *expectFile); err != nil {
+		return ExitValidationError, err
+	}
+	diff := renderBodyRangeDiff(*lineRange, oldContent, newContent)
+	if newBody == pr.Body {
+		return writeNoChanges(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Range: *lineRange, URL: pr.URL})
+	}
+	if *dryRun {
+		return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Range: *lineRange, Updated: false, Changed: true, DryRun: true, URL: pr.URL, Message: diff}, diff)
+	}
+	updated, err := gh.UpdatePullRequestBody(prNumber, newBody)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Range: *lineRange, Updated: true, Changed: true, URL: updated.URL, Message: diff}, diff)
+}
+
+func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
+	fs := flag.NewFlagSet("body write", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	marker := fs.String("marker", "", "HTML comment marker name")
+	file := fs.String("file", "", "read replacement content from file")
+	insert := fs.Bool("insert-if-missing", false, "append marker block if it does not exist")
+	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	yes := fs.Bool("yes", false, "run non-interactively")
+	if err := parseFlagSet(fs, args); err != nil {
+		return ExitValidationError, validationError(err.Error(), "Use a PR number, --marker, and --file or -.", "gh-prx body write 123 --marker section --file section.md")
+	}
+	_ = yes
+	prNumber, inputPath, err := writeTarget(fs.Args(), "body write")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	if *marker == "" {
+		return ExitValidationError, validationError("missing required flag: --marker", "Choose the named marker block to update.", "gh-prx body write 123 --marker section --file section.md")
+	}
+	if err := validateMarkerName(*marker); err != nil {
+		return ExitValidationError, err
+	}
+	replacement, err := readInput(stdin, inputPath, *file, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	pr, err := gh.GetPullRequest(prNumber)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	newBody, oldContent, newContent, err := replaceMarker(pr.Body, *marker, replacement)
+	if err != nil {
+		if errors.Is(err, errMarkerAmbiguous) {
+			return ExitAmbiguousTarget, ambiguousMarkerError("body", prNumber, *marker)
+		}
+		if errors.Is(err, errReplacementContainsMarkers) {
+			return ExitValidationError, markerTokenInputError(*marker, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+		}
+		if !*insert {
+			return ExitMarkerNotFound, writeMarkerError("body", prNumber, *marker, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md --insert-if-missing")
+		}
+		oldContent = ""
+		newContent = strings.TrimSuffix(replacement, "\n")
+		newBody, err = insertMarkerIfMissing(pr.Body, *marker, replacement)
+		if err != nil {
+			if errors.Is(err, errReplacementContainsMarkers) {
+				return ExitValidationError, markerTokenInputError(*marker, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+			}
+			return ExitValidationError, err
+		}
+	}
+	diff := renderMarkerDiff(*marker, oldContent, newContent)
+	if newBody == pr.Body {
+		return writeNoChanges(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Marker: *marker, URL: pr.URL})
+	}
+	if *dryRun {
+		return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Marker: *marker, Updated: false, Changed: true, DryRun: true, URL: pr.URL, Message: diff}, diff)
+	}
+	updated, err := gh.UpdatePullRequestBody(prNumber, newBody)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_body", PullNumber: prNumber, Marker: *marker, Updated: true, Changed: true, URL: updated.URL, Message: diff}, diff)
+}
+
+func runComment(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
+	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
+		fmt.Fprint(stdout, commentHelp())
+		return ExitSuccess, nil
+	}
+	switch args[0] {
+	case "read":
+		return runCommentRead(args[1:], stdout, gh)
+	case "write", "patch":
+		return runCommentWrite(args[1:], stdin, stdout, gh)
+	case "upsert":
+		return runCommentUpsert(args[1:], stdin, stdout, gh)
+	default:
+		return ExitValidationError, validationError("unknown comment command: "+args[0], "Use: gh-prx comment read, write, or upsert.", "gh-prx comment --help")
+	}
+}
+
+func runCommentRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) {
+	fs := flag.NewFlagSet("comment read", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	marker := fs.String("marker", "", "HTML comment marker name")
+	commentID := fs.Int64("comment-id", 0, "specific issue comment id")
+	plain := fs.Bool("plain", false, "print only marker content")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	if err := parseFlagSet(fs, args); err != nil {
+		return ExitValidationError, validationError(err.Error(), "Use a PR number plus --marker or --comment-id.", "gh-prx comment read 123 --marker section")
+	}
+	prNumber, err := onePRNumber(fs.Args(), "comment read")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	comment, err := selectComment(gh, prNumber, *marker, *commentID)
+	if err != nil {
+		return errorCode(err), err
+	}
+	output := comment.Body
+	if *marker != "" {
+		output, err = readMarker(comment.Body, *marker, *plain)
+		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return ExitAmbiguousTarget, ambiguousMarkerError("comment", prNumber, *marker)
+			}
+			return ExitMarkerNotFound, markerError("comment", prNumber, *marker, "")
+		}
+	}
+	if *jsonOut {
+		writeJSON(stdout, map[string]any{
+			"target":      "pull_request_comment",
+			"pull_number": prNumber,
+			"comment_id":  comment.ID,
+			"marker":      *marker,
+			"body":        output,
+			"url":         comment.URL,
+		})
+		return ExitSuccess, nil
+	}
+	fmt.Fprint(stdout, output)
+	if output != "" && !strings.HasSuffix(output, "\n") {
+		fmt.Fprintln(stdout)
+	}
+	return ExitSuccess, nil
+}
+
+func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
+	fs := flag.NewFlagSet("comment write", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	marker := fs.String("marker", "", "HTML comment marker name")
+	commentID := fs.Int64("comment-id", 0, "specific issue comment id")
+	file := fs.String("file", "", "read replacement content from file")
+	insert := fs.Bool("insert-if-missing", false, "append marker block if it does not exist")
+	whole := fs.Bool("whole", false, "replace the whole comment instead of a marker block")
+	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	yes := fs.Bool("yes", false, "run non-interactively")
+	if err := parseFlagSet(fs, args); err != nil {
+		return ExitValidationError, validationError(err.Error(), "Use a PR number, --comment-id, --marker, and --file or -.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
+	}
+	_ = yes
+	prNumber, inputPath, err := writeTarget(fs.Args(), "comment write")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	if *commentID <= 0 {
+		return ExitValidationError, validationError("invalid required flag: --comment-id", "Choose one exact positive comment id to update.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
+	}
+	if *marker == "" && !*whole {
+		return ExitValidationError, validationError("missing required flag: --marker", "Choose the named marker block to update, or pass --whole to replace the entire comment.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
+	}
+	if *marker != "" && *whole {
+		return ExitValidationError, validationError("conflicting flags: --marker and --whole", "Use --marker for block updates or --whole for entire-comment replacement, not both.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
+	}
+	if err := validateMarkerName(*marker); err != nil {
+		return ExitValidationError, err
+	}
+	if *whole && *insert {
+		return ExitValidationError, validationError("conflicting flags: --whole and --insert-if-missing", "--insert-if-missing only applies to marker block updates.", "gh-prx comment write 123 --comment-id 123456 --whole --file comment.md")
+	}
+	readRetry := "gh-prx comment write " + strconv.Itoa(prNumber) + " --comment-id " + strconv.FormatInt(*commentID, 10)
+	if *whole {
+		readRetry += " --whole --file comment.md"
+	} else {
+		readRetry += " --marker " + *marker + " --file section.md"
+	}
+	replacement, err := readInput(stdin, inputPath, *file, readRetry)
+	if err != nil {
+		return ExitValidationError, err
+	}
+	comment, err := commentByIDInPR(gh, prNumber, *commentID)
+	if err != nil {
+		return errorCode(err), err
+	}
+	newBody := strings.TrimSuffix(replacement, "\n")
+	oldContent := comment.Body
+	newContent := newBody
+	diff := ""
+	if *marker != "" {
+		newBody, oldContent, newContent, err = replaceMarker(comment.Body, *marker, replacement)
+		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return ExitAmbiguousTarget, ambiguousMarkerError("comment", prNumber, *marker)
+			}
+			if errors.Is(err, errReplacementContainsMarkers) {
+				return ExitValidationError, markerTokenInputError(*marker, "gh-prx comment write "+strconv.Itoa(prNumber)+" --comment-id "+strconv.FormatInt(*commentID, 10)+" --marker "+*marker+" --file section.md")
+			}
+			if !*insert {
+				return ExitMarkerNotFound, writeMarkerError("comment", prNumber, *marker, "gh-prx comment write "+strconv.Itoa(prNumber)+" --comment-id "+strconv.FormatInt(*commentID, 10)+" --marker "+*marker+" --file section.md --insert-if-missing")
+			}
+			oldContent = ""
+			newContent = strings.TrimSuffix(replacement, "\n")
+			newBody, err = insertMarkerIfMissing(comment.Body, *marker, replacement)
+			if err != nil {
+				if errors.Is(err, errReplacementContainsMarkers) {
+					return ExitValidationError, markerTokenInputError(*marker, "gh-prx comment write "+strconv.Itoa(prNumber)+" --comment-id "+strconv.FormatInt(*commentID, 10)+" --marker "+*marker+" --file section.md")
+				}
+				return ExitValidationError, err
+			}
+		}
+		diff = renderMarkerDiff(*marker, oldContent, newContent)
+	} else {
+		diff = renderWholeDiff(comment.Body, newBody)
+	}
+	if newBody == comment.Body {
+		return writeNoChanges(stdout, *jsonOut, commandResult{Target: "pull_request_comment", PullNumber: prNumber, CommentID: *commentID, Marker: *marker, URL: comment.URL})
+	}
+	if *dryRun {
+		return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_comment", PullNumber: prNumber, CommentID: *commentID, Marker: *marker, Updated: false, Changed: true, DryRun: true, URL: comment.URL, Message: diff}, diff)
+	}
+	updated, err := gh.UpdateComment(*commentID, newBody)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_comment", PullNumber: prNumber, CommentID: updated.ID, Marker: *marker, Updated: true, Changed: true, URL: updated.URL, Message: diff}, diff)
+}
+
+func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHubClient) (int, error) {
+	fs := flag.NewFlagSet("comment upsert", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	marker := fs.String("marker", "", "HTML comment marker name")
+	file := fs.String("file", "", "read replacement content from file")
+	dryRun := fs.Bool("dry-run", false, "print diff without updating GitHub")
+	jsonOut := fs.Bool("json", false, "print JSON")
+	yes := fs.Bool("yes", false, "run non-interactively")
+	if err := parseFlagSet(fs, args); err != nil {
+		return ExitValidationError, validationError(err.Error(), "Use a PR number, --marker, and --file or -.", "gh-prx comment upsert 123 --marker section --file section.md")
+	}
+	_ = yes
+	prNumber, inputPath, err := writeTarget(fs.Args(), "comment upsert")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	if *marker == "" {
+		return ExitValidationError, validationError("missing required flag: --marker", "Upsert needs a marker to find or create the managed comment.", "gh-prx comment upsert 123 --marker section --file section.md")
+	}
+	if err := validateMarkerName(*marker); err != nil {
+		return ExitValidationError, err
+	}
+	replacement, err := readInput(stdin, inputPath, *file, "gh-prx comment upsert "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+	if err != nil {
+		return ExitValidationError, err
+	}
+	matches, err := matchingCurrentUserComments(gh, prNumber, *marker)
+	if err != nil {
+		return errorCode(err), err
+	}
+	newContent := strings.TrimSuffix(replacement, "\n")
+	if len(matches) == 0 {
+		if replacementContainsMarkerToken(*marker, replacement) {
+			return ExitValidationError, markerTokenInputError(*marker, "gh-prx comment upsert "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+		}
+		body := markerBlock(*marker, replacement)
+		diff := renderMarkerDiff(*marker, "", newContent)
+		if *dryRun {
+			return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_comment", PullNumber: prNumber, Marker: *marker, Updated: false, Changed: true, DryRun: true, Message: diff}, diff)
+		}
+		created, err := gh.CreateComment(prNumber, body)
+		if err != nil {
+			return ExitGitHubAPIError, apiError(err)
+		}
+		return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_comment", PullNumber: prNumber, CommentID: created.ID, Marker: *marker, Updated: true, Changed: true, URL: created.URL, Message: diff}, diff)
+	}
+	comment := matches[0]
+	newBody, oldContent, _, err := replaceMarker(comment.Body, *marker, replacement)
+	if err != nil {
+		if errors.Is(err, errMarkerAmbiguous) {
+			return ExitAmbiguousTarget, ambiguousMarkerError("comment", prNumber, *marker)
+		}
+		if errors.Is(err, errReplacementContainsMarkers) {
+			return ExitValidationError, markerTokenInputError(*marker, "gh-prx comment upsert "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
+		}
+		return ExitMarkerNotFound, markerError("comment", prNumber, *marker, "")
+	}
+	diff := renderMarkerDiff(*marker, oldContent, newContent)
+	if newBody == comment.Body {
+		return writeNoChanges(stdout, *jsonOut, commandResult{Target: "pull_request_comment", PullNumber: prNumber, CommentID: comment.ID, Marker: *marker, URL: comment.URL})
+	}
+	if *dryRun {
+		return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_comment", PullNumber: prNumber, CommentID: comment.ID, Marker: *marker, Updated: false, Changed: true, DryRun: true, URL: comment.URL, Message: diff}, diff)
+	}
+	updated, err := gh.UpdateComment(comment.ID, newBody)
+	if err != nil {
+		return ExitGitHubAPIError, apiError(err)
+	}
+	return writeSuccess(stdout, *jsonOut, commandResult{Target: "pull_request_comment", PullNumber: prNumber, CommentID: updated.ID, Marker: *marker, Updated: true, Changed: true, URL: updated.URL, Message: diff}, diff)
+}
+
+func selectComment(gh GitHubClient, prNumber int, marker string, commentID int64) (Comment, error) {
+	if commentID < 0 {
+		return Comment{}, validationError("invalid flag: --comment-id", "Use a positive comment id.", "gh-prx comment read 123 --comment-id 123456")
+	}
+	if commentID != 0 {
+		return commentByIDInPR(gh, prNumber, commentID)
+	}
+	if marker == "" {
+		return Comment{}, validationError("missing required flag: --marker or --comment-id", "Choose a marker search or one exact comment.", "gh-prx comment read 123 --marker section")
+	}
+	if err := validateMarkerName(marker); err != nil {
+		return Comment{}, err
+	}
+	matches, err := matchingComments(gh, prNumber, marker)
+	if err != nil {
+		return Comment{}, err
+	}
+	if len(matches) == 0 {
+		return Comment{}, markerError("comment", prNumber, marker, "")
+	}
+	return matches[0], nil
+}
+
+func commentByIDInPR(gh GitHubClient, prNumber int, commentID int64) (Comment, error) {
+	comments, err := gh.ListComments(prNumber)
+	if err != nil {
+		return Comment{}, apiError(err)
+	}
+	for _, comment := range comments {
+		if comment.ID == commentID {
+			return comment, nil
+		}
+	}
+	return Comment{}, appError{
+		Code:    ExitAmbiguousTarget,
+		Kind:    "ambiguous_target",
+		Message: "comment not found in pull request: " + strconv.FormatInt(commentID, 10),
+		Fix:     []string{"Confirm the comment belongs to the specified PR.", "Use gh-prx comment read <pr-number> --marker <marker> to list the managed target."},
+		Retry:   "gh-prx comment read " + strconv.Itoa(prNumber) + " --marker section",
+	}
+}
+
+func matchingComments(gh GitHubClient, prNumber int, marker string) ([]Comment, error) {
+	comments, err := gh.ListComments(prNumber)
+	if err != nil {
+		return nil, apiError(err)
+	}
+	matches := make([]Comment, 0)
+	for _, comment := range comments {
+		matched, err := containsMarker(comment.Body, marker)
+		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return nil, ambiguousCommentMarkerError(prNumber, marker, comment)
+			}
+			return nil, err
+		}
+		if matched {
+			matches = append(matches, comment)
+		}
+	}
+	if len(matches) > 1 {
+		return nil, ambiguousError(prNumber, marker, matches)
+	}
+	return matches, nil
+}
+
+func matchingCurrentUserComments(gh GitHubClient, prNumber int, marker string) ([]Comment, error) {
+	login, err := gh.CurrentLogin()
+	if err != nil {
+		return nil, apiError(err)
+	}
+	comments, err := gh.ListComments(prNumber)
+	if err != nil {
+		return nil, apiError(err)
+	}
+	owned := make([]Comment, 0)
+	for _, comment := range comments {
+		if comment.Author != login {
+			continue
+		}
+		matched, err := containsMarker(comment.Body, marker)
+		if err != nil {
+			if errors.Is(err, errMarkerAmbiguous) {
+				return nil, ambiguousCommentMarkerError(prNumber, marker, comment)
+			}
+			return nil, err
+		}
+		if matched {
+			owned = append(owned, comment)
+		}
+	}
+	if len(owned) > 1 {
+		return nil, ambiguousError(prNumber, marker, owned)
+	}
+	return owned, nil
+}
+
+func validateMarkerName(marker string) error {
+	if marker == "" {
+		return nil
+	}
+	if strings.ContainsAny(marker, " \t\r\n") || strings.Contains(marker, "<") || strings.Contains(marker, ">") || strings.Contains(marker, "--") {
+		return validationError("invalid marker name: "+marker, "Use a compact marker name without whitespace, angle brackets, or HTML comment delimiters.", "gh-prx body read 123 --marker section")
+	}
+	return nil
+}
+
+type lineRange struct {
+	Start int
+	End   int
+}
+
+func parseLineRange(value string) (lineRange, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return lineRange{}, validationError("invalid range: "+value, "Use a 1-based inclusive range in start:end form.", "gh-prx body read 123 --range 12:18")
+	}
+	start, err := strconv.Atoi(parts[0])
+	if err != nil || start <= 0 {
+		return lineRange{}, validationError("invalid range start: "+parts[0], "Use a positive 1-based start line.", "gh-prx body read 123 --range 12:18")
+	}
+	end, err := strconv.Atoi(parts[1])
+	if err != nil || end <= 0 {
+		return lineRange{}, validationError("invalid range end: "+parts[1], "Use a positive 1-based end line.", "gh-prx body read 123 --range 12:18")
+	}
+	if start > end {
+		return lineRange{}, validationError("invalid range: start is after end", "Use a range where start is less than or equal to end.", "gh-prx body read 123 --range 12:18")
+	}
+	return lineRange{Start: start, End: end}, nil
+}
+
+func readBodyLineRange(body string, rng lineRange) (string, error) {
+	lines, _ := bodyLines(body)
+	if len(lines) == 0 {
+		return "", validationError("body is empty", "Choose a PR body that has lines to read.", "gh-prx body read 123")
+	}
+	if rng.End > len(lines) {
+		return "", validationError("range exceeds body length", fmt.Sprintf("The PR body has %d lines; choose a range inside it.", len(lines)), "gh-prx body read 123")
+	}
+	return strings.Join(lines[rng.Start-1:rng.End], "\n"), nil
+}
+
+func replaceBodyLineRange(body string, rng lineRange, replacement string) (string, string, string, error) {
+	lines, hadFinalNewline := bodyLines(body)
+	if len(lines) == 0 {
+		return "", "", "", validationError("body is empty", "Choose a PR body that has lines to replace.", "gh-prx body lines 123 --range 1:1 --file section.md --dry-run")
+	}
+	if rng.End > len(lines) {
+		return "", "", "", validationError("range exceeds body length", fmt.Sprintf("The PR body has %d lines; choose a range inside it.", len(lines)), "gh-prx body read 123")
+	}
+	oldContent := strings.Join(lines[rng.Start-1:rng.End], "\n")
+	newContent := strings.TrimSuffix(replacement, "\n")
+	replacementLines := splitLines(replacement)
+	newLines := make([]string, 0, len(lines)-(rng.End-rng.Start+1)+len(replacementLines))
+	newLines = append(newLines, lines[:rng.Start-1]...)
+	newLines = append(newLines, replacementLines...)
+	newLines = append(newLines, lines[rng.End:]...)
+	newBody := strings.Join(newLines, "\n")
+	if hadFinalNewline && newBody != "" {
+		newBody += "\n"
+	}
+	return newBody, oldContent, newContent, nil
+}
+
+func bodyLines(body string) ([]string, bool) {
+	hadFinalNewline := strings.HasSuffix(body, "\n")
+	body = strings.TrimSuffix(body, "\n")
+	if body == "" {
+		return nil, hadFinalNewline
+	}
+	return strings.Split(body, "\n"), hadFinalNewline
+}
+
+func validateLineRangeGuards(oldContent, expectSHA, expectFile string) error {
+	if expectSHA != "" && expectSHA != contentSHA(oldContent) {
+		return validationError("line range expectation failed: --expect-sha does not match", "Read the range again and retry with the current body_sha.", "gh-prx body read 123 --range 12:18 --json")
+	}
+	if expectFile == "" {
+		return nil
+	}
+	data, err := os.ReadFile(expectFile)
+	if err != nil {
+		return validationError("cannot read expect file: "+expectFile, "Check that the expected-content file exists and is readable.", "gh-prx body lines 123 --range 12:18 --expect-file old.md --file new.md")
+	}
+	if strings.TrimSuffix(string(data), "\n") != oldContent {
+		return validationError("line range expectation failed: --expect-file does not match", "Read the range again and update the expected-content file before retrying.", "gh-prx body read 123 --range 12:18")
+	}
+	return nil
+}
+
+func contentSHA(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func onePRNumber(args []string, command string) (int, error) {
+	if len(args) != 1 {
+		return 0, validationError("expected exactly one PR number for "+command, "Pass the pull request number as the first positional argument.", "gh-prx "+command+" 123 --marker section")
+	}
+	n, err := strconv.Atoi(args[0])
+	if err != nil || n <= 0 {
+		return 0, validationError("invalid PR number: "+args[0], "Use a positive numeric pull request number.", "gh-prx "+command+" 123 --marker section")
+	}
+	return n, nil
+}
+
+func writeTarget(args []string, command string) (int, string, error) {
+	if len(args) < 1 || len(args) > 2 {
+		return 0, "", validationError("expected PR number and optional input path for "+command, "Use --file path or '-' for stdin.", "gh-prx "+command+" 123 --marker section --file section.md")
+	}
+	prNumber, err := strconv.Atoi(args[0])
+	if err != nil || prNumber <= 0 {
+		return 0, "", validationError("invalid PR number: "+args[0], "Use a positive numeric pull request number.", "gh-prx "+command+" 123 --marker section --file section.md")
+	}
+	inputPath := ""
+	if len(args) == 2 {
+		inputPath = args[1]
+	}
+	return prNumber, inputPath, nil
+}
+
+func readInput(stdin io.Reader, positionalPath, fileFlag, retry string) (string, error) {
+	if positionalPath != "" && fileFlag != "" {
+		return "", validationError("input specified twice", "Use either --file path or '-' for stdin, not both.", retry)
+	}
+	if fileFlag == "-" {
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return "", validationError("cannot read stdin", "Pipe content into the command.", strings.Replace(retry, "--file section.md", "--file -", 1))
+		}
+		return string(data), nil
+	}
+	if fileFlag != "" {
+		data, err := os.ReadFile(fileFlag)
+		if err != nil {
+			return "", validationError("cannot read file: "+fileFlag, "Check that the file exists and is readable.", strings.Replace(retry, "--file section.md", "--file "+fileFlag, 1))
+		}
+		return string(data), nil
+	}
+	if positionalPath == "-" {
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			return "", validationError("cannot read stdin", "Pipe content into the command.", retry+" -")
+		}
+		return string(data), nil
+	}
+	if positionalPath != "" {
+		data, err := os.ReadFile(positionalPath)
+		if err != nil {
+			return "", validationError("cannot read file: "+positionalPath, "Check that the file exists and is readable.", strings.Replace(retry, "--file section.md", "--file "+positionalPath, 1))
+		}
+		return string(data), nil
+	}
+	return "", validationError("missing input", "Pass replacement content with --file path or '-'.", retry)
+}
+
+func writeSuccess(stdout io.Writer, jsonOut bool, result commandResult, text string) (int, error) {
+	if jsonOut {
+		writeJSON(stdout, result)
+		return ExitSuccess, nil
+	}
+	fmt.Fprint(stdout, text)
+	return ExitSuccess, nil
+}
+
+func writeNoChanges(stdout io.Writer, jsonOut bool, result commandResult) (int, error) {
+	result.Changed = false
+	result.Updated = false
+	result.Message = "no changes"
+	if jsonOut {
+		writeJSON(stdout, result)
+	} else {
+		fmt.Fprintln(stdout, "no changes")
+	}
+	return ExitNoChanges, nil
+}
+
+func writeJSON(stdout io.Writer, value any) {
+	encoder := json.NewEncoder(stdout)
+	encoder.SetIndent("", "  ")
+	_ = encoder.Encode(value)
+}
+
+func writeError(stderr io.Writer, err error) {
+	var app appError
+	if !errors.As(err, &app) {
+		fmt.Fprintf(stderr, "error: %s\n", err)
+		return
+	}
+	fmt.Fprintf(stderr, "error: %s\n\n", app.Message)
+	if len(app.Fix) > 0 {
+		fmt.Fprintln(stderr, "fix:")
+		for i, fix := range displayFixes(app.Fix) {
+			fmt.Fprintf(stderr, "  %d. %s\n", i+1, fix)
+		}
+		fmt.Fprintln(stderr)
+	}
+	if app.Retry != "" {
+		fmt.Fprintln(stderr, "retry:")
+		fmt.Fprintf(stderr, "  %s\n", displayCommand(app.Retry))
+	}
+}
+
+func displayFixes(fixes []string) []string {
+	if len(fixes) == 0 {
+		return nil
+	}
+	out := make([]string, len(fixes))
+	for i, fix := range fixes {
+		out[i] = displayCommand(fix)
+	}
+	return out
+}
+
+func displayCommand(text string) string {
+	cmd := commandName()
+	if cmd == "gh-prx" || text == "" {
+		return text
+	}
+	if text == "gh-prx" {
+		return cmd
+	}
+	if strings.HasPrefix(text, "gh-prx ") {
+		return cmd + strings.TrimPrefix(text, "gh-prx")
+	}
+	return strings.ReplaceAll(text, "gh-prx ", cmd+" ")
+}
+
+func errorCode(err error) int {
+	var app appError
+	if errors.As(err, &app) {
+		return app.Code
+	}
+	return ExitGitHubAPIError
+}
+
+func errorKind(err error) string {
+	var app appError
+	if errors.As(err, &app) {
+		return app.Kind
+	}
+	return "github_api_error"
+}
+
+func validationError(message, fix, retry string) appError {
+	return appError{Code: ExitValidationError, Kind: "validation_error", Message: message, Fix: []string{fix}, Retry: retry}
+}
+
+func markerError(target string, prNumber int, marker, retry string) appError {
+	start, end := markerTokens(marker)
+	fix := []string{
+		"Confirm the marker name and target PR " + target + ".",
+		"Expected markers: " + start + " and " + end + ".",
+	}
+	if retry == "" {
+		retry = "gh-prx " + target + " read " + strconv.Itoa(prNumber) + " --marker " + marker
+	}
+	return appError{Code: ExitMarkerNotFound, Kind: "marker_not_found", Message: "marker not found: " + marker, Fix: fix, Retry: retry}
+}
+
+func writeMarkerError(target string, prNumber int, marker, retry string) appError {
+	start, end := markerTokens(marker)
+	fix := []string{
+		"Add the marker block to the PR " + target + ".",
+		"Retry with --insert-if-missing when creating the block is intended.",
+		"Expected markers: " + start + " and " + end + ".",
+	}
+	if retry == "" {
+		retry = "gh-prx " + target + " write " + strconv.Itoa(prNumber) + " --marker " + marker + " --file section.md --insert-if-missing"
+	}
+	return appError{Code: ExitMarkerNotFound, Kind: "marker_not_found", Message: "marker not found: " + marker, Fix: fix, Retry: retry}
+}
+
+func markerTokenInputError(marker, retry string) appError {
+	start, end := markerTokens(marker)
+	return appError{
+		Code:    ExitValidationError,
+		Kind:    "validation_error",
+		Message: "replacement contains marker token: " + marker,
+		Fix: []string{
+			"Remove the marker boundary tokens from the replacement content.",
+			"Use a different marker name when documenting marker examples inside the block.",
+			"Disallowed tokens: " + start + " and " + end + ".",
+		},
+		Retry: retry,
+	}
+}
+
+func ambiguousError(prNumber int, marker string, candidates []Comment) appError {
+	lines := make([]string, 0, len(candidates)+1)
+	lines = append(lines, "Pick one comment and rerun with --comment-id.")
+	for _, c := range candidates {
+		lines = append(lines, fmt.Sprintf("candidate comment_id=%d author=%s updated=%s", c.ID, c.Author, c.UpdatedAt))
+	}
+	retry := "gh-prx comment write " + strconv.Itoa(prNumber) + " --comment-id " + strconv.FormatInt(candidates[len(candidates)-1].ID, 10) + " --marker " + marker + " --file section.md"
+	return appError{Code: ExitAmbiguousTarget, Kind: "ambiguous_target", Message: "multiple comments matched marker: " + marker, Fix: lines, Retry: retry}
+}
+
+func ambiguousMarkerError(target string, prNumber int, marker string) appError {
+	return appError{
+		Code:    ExitAmbiguousTarget,
+		Kind:    "ambiguous_target",
+		Message: "multiple or malformed marker blocks found in PR " + target + ": " + marker,
+		Fix:     []string{"Keep exactly one complete marker block for each marker name in the PR " + target + "."},
+		Retry:   "gh-prx " + target + " read " + strconv.Itoa(prNumber) + " --marker " + marker,
+	}
+}
+
+func ambiguousCommentMarkerError(prNumber int, marker string, comment Comment) appError {
+	return appError{
+		Code:    ExitAmbiguousTarget,
+		Kind:    "ambiguous_target",
+		Message: "multiple or malformed marker blocks found in comment: " + marker,
+		Fix: []string{
+			"Keep exactly one complete marker block for each marker name in the comment.",
+			fmt.Sprintf("candidate comment_id=%d author=%s updated=%s", comment.ID, comment.Author, comment.UpdatedAt),
+		},
+		Retry: "gh-prx comment write " + strconv.Itoa(prNumber) + " --comment-id " + strconv.FormatInt(comment.ID, 10) + " --marker " + marker + " --file section.md",
+	}
+}
+
+func apiError(err error) appError {
+	return appError{
+		Code:    ExitGitHubAPIError,
+		Kind:    "github_api_error",
+		Message: err.Error(),
+		Fix:     []string{"Check gh authentication, repository permissions, and network access."},
+		Retry:   "gh auth status",
+	}
+}
+
+func hasFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name || strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func parseFlagSet(fs *flag.FlagSet, args []string) error {
+	if err := validateValueFlags(args); err != nil {
+		return err
+	}
+	return fs.Parse(normalizeFlags(args))
+}
+
+func validateValueFlags(args []string) error {
+	valueFlags := map[string]bool{
+		"--marker":      true,
+		"--file":        true,
+		"--comment-id":  true,
+		"--range":       true,
+		"--expect-sha":  true,
+		"--expect-file": true,
+	}
+	for i, arg := range args {
+		name := arg
+		if idx := strings.Index(arg, "="); idx >= 0 {
+			name = arg[:idx]
+			if valueFlags[name] && arg[idx+1:] == "" {
+				return fmt.Errorf("missing value for %s", name)
+			}
+		}
+		if valueFlags[name] && !strings.Contains(arg, "=") {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+				return fmt.Errorf("missing value for %s", name)
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeFlags(args []string) []string {
+	valueFlags := map[string]bool{
+		"--marker":      true,
+		"--file":        true,
+		"--comment-id":  true,
+		"--range":       true,
+		"--expect-sha":  true,
+		"--expect-file": true,
+	}
+	var flags []string
+	var positionals []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			flags = append(flags, arg)
+			name := arg
+			if idx := strings.Index(arg, "="); idx >= 0 {
+				name = arg[:idx]
+			}
+			if valueFlags[name] && !strings.Contains(arg, "=") && i+1 < len(args) {
+				i++
+				flags = append(flags, args[i])
+			}
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+	return append(flags, positionals...)
+}
+
+func rootHelp() string {
+	cmd := commandName()
+	return fmt.Sprintf(`%s treats GitHub pull request markdown fields as named read/write blocks.
+
+Examples:
+  %[1]s body read 123 --marker section
+  %[1]s body read 123 --marker section --plain
+  %[1]s body read 123 --range 12:18 --json
+  %[1]s body write 123 --marker section --file section.md --dry-run
+  %[1]s body lines 123 --range 12:18 --file section.md --dry-run
+  %[1]s body lines 123 --range 12:18 --file section.md --expect-sha <body_sha>
+  cat section.md | %[1]s body write 123 --marker section -
+  %[1]s comment read 123 --marker section
+  %[1]s comment write 123 --comment-id 123456 --marker section --file section.md
+  %[1]s comment upsert 123 --marker section --file section.md
+
+Exit codes:
+  0  success
+  1  validation error
+  2  marker not found
+  3  ambiguous target
+  4  GitHub API error
+  5  no changes
+
+Use --json for machine-readable output and --dry-run to preview writes.
+`, cmd)
+}
+
+func bodyHelp() string {
+	cmd := commandName()
+	return fmt.Sprintf(`Examples:
+  %[1]s body read 123 --marker section
+  %[1]s body read 123 --marker section --plain
+  %[1]s body read 123 --range 12:18 --json
+  %[1]s body write 123 --marker section --file section.md
+  %[1]s body write 123 --marker section --file section.md --dry-run
+  %[1]s body lines 123 --range 12:18 --file section.md --dry-run
+  %[1]s body lines 123 --range 12:18 --file section.md --expect-sha <body_sha>
+  cat section.md | %[1]s body write 123 --marker section -
+`, cmd)
+}
+
+func commentHelp() string {
+	cmd := commandName()
+	return fmt.Sprintf(`Examples:
+  %[1]s comment read 123 --marker section
+  %[1]s comment read 123 --comment-id 123456
+  %[1]s comment write 123 --comment-id 123456 --marker section --file section.md
+  %[1]s comment write 123 --comment-id 123456 --marker section --file section.md --dry-run
+  %[1]s comment write 123 --comment-id 123456 --whole --file comment.md
+  %[1]s comment upsert 123 --marker section --file section.md
+`, cmd)
+}
+
+func commandName() string {
+	if name := os.Getenv("GH_PRX_COMMAND_NAME"); name != "" {
+		return name
+	}
+	switch filepath.Base(os.Args[0]) {
+	case "gh-patch":
+		return "gh patch"
+	case "gh-prx":
+		return "gh-prx"
+	}
+	return "gh-prx"
+}
