@@ -307,6 +307,24 @@ func TestConfiguredCommandNameDoesNotRewriteMarkerNames(t *testing.T) {
 	}
 }
 
+func TestMarkerNameRejectsWhitespace(t *testing.T) {
+	gh := &fakeGitHub{expectedPRNumber: 123, fail: errors.New("unexpected api call")}
+	var stdout, stderr bytes.Buffer
+
+	code := Run([]string{"body", "read", "123", "--marker", "gh-prx summary"}, strings.NewReader(""), &stdout, &stderr, gh)
+
+	if code != ExitValidationError {
+		t.Fatalf("exit code = %d, want %d", code, ExitValidationError)
+	}
+	errText := stderr.String()
+	if !strings.Contains(errText, "invalid marker name: gh-prx summary") {
+		t.Fatalf("stderr = %q, want invalid marker name", errText)
+	}
+	if !strings.Contains(errText, "without whitespace") {
+		t.Fatalf("stderr = %q, want marker naming guidance", errText)
+	}
+}
+
 func TestGhPatchBinaryNameDisplaysGhPatchCommand(t *testing.T) {
 	originalArgs := os.Args
 	os.Args = []string{filepath.Join(t.TempDir(), "gh-patch")}

@@ -119,6 +119,9 @@ func runBodyRead(args []string, stdout io.Writer, gh GitHubClient) (int, error) 
 	if *marker != "" && *lineRange != "" {
 		return ExitValidationError, validationError("conflicting flags: --marker and --range", "Read either a named marker block or a body line range.", "gh-prx body read 123 --range 12:18")
 	}
+	if err := validateMarkerName(*marker); err != nil {
+		return ExitValidationError, err
+	}
 	pr, err := gh.GetPullRequest(prNumber)
 	if err != nil {
 		return ExitGitHubAPIError, apiError(err)
@@ -241,6 +244,9 @@ func runBodyWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHubCli
 	}
 	if *marker == "" {
 		return ExitValidationError, validationError("missing required flag: --marker", "Choose the named marker block to update.", "gh-prx body write 123 --marker section --file section.md")
+	}
+	if err := validateMarkerName(*marker); err != nil {
+		return ExitValidationError, err
 	}
 	replacement, err := readInput(stdin, inputPath, *file, "gh-prx body write "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
 	if err != nil {
@@ -376,6 +382,9 @@ func runCommentWrite(args []string, stdin io.Reader, stdout io.Writer, gh GitHub
 	if *marker != "" && *whole {
 		return ExitValidationError, validationError("conflicting flags: --marker and --whole", "Use --marker for block updates or --whole for entire-comment replacement, not both.", "gh-prx comment write 123 --comment-id 123456 --marker section --file section.md")
 	}
+	if err := validateMarkerName(*marker); err != nil {
+		return ExitValidationError, err
+	}
 	if *whole && *insert {
 		return ExitValidationError, validationError("conflicting flags: --whole and --insert-if-missing", "--insert-if-missing only applies to marker block updates.", "gh-prx comment write 123 --comment-id 123456 --whole --file comment.md")
 	}
@@ -455,6 +464,9 @@ func runCommentUpsert(args []string, stdin io.Reader, stdout io.Writer, gh GitHu
 	if *marker == "" {
 		return ExitValidationError, validationError("missing required flag: --marker", "Upsert needs a marker to find or create the managed comment.", "gh-prx comment upsert 123 --marker section --file section.md")
 	}
+	if err := validateMarkerName(*marker); err != nil {
+		return ExitValidationError, err
+	}
 	replacement, err := readInput(stdin, inputPath, *file, "gh-prx comment upsert "+strconv.Itoa(prNumber)+" --marker "+*marker+" --file section.md")
 	if err != nil {
 		return ExitValidationError, err
@@ -513,6 +525,9 @@ func selectComment(gh GitHubClient, prNumber int, marker string, commentID int64
 	}
 	if marker == "" {
 		return Comment{}, validationError("missing required flag: --marker or --comment-id", "Choose a marker search or one exact comment.", "gh-prx comment read 123 --marker section")
+	}
+	if err := validateMarkerName(marker); err != nil {
+		return Comment{}, err
 	}
 	matches, err := matchingComments(gh, prNumber, marker)
 	if err != nil {
@@ -596,6 +611,16 @@ func matchingCurrentUserComments(gh GitHubClient, prNumber int, marker string) (
 		return nil, ambiguousError(prNumber, marker, owned)
 	}
 	return owned, nil
+}
+
+func validateMarkerName(marker string) error {
+	if marker == "" {
+		return nil
+	}
+	if strings.ContainsAny(marker, " \t\r\n") || strings.Contains(marker, "<") || strings.Contains(marker, ">") || strings.Contains(marker, "--") {
+		return validationError("invalid marker name: "+marker, "Use a compact marker name without whitespace, angle brackets, or HTML comment delimiters.", "gh-prx body read 123 --marker section")
+	}
+	return nil
 }
 
 type lineRange struct {

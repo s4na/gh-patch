@@ -113,6 +113,8 @@ body edits. Line-range replacement is intended as an escape hatch for existing
 PR bodies. A real `body lines` update requires one of `--expect-sha`,
 `--expect-file`, or `--force`; `--dry-run` remains available without a guard so
 humans and agents can inspect the exact replacement first.
+Marker names must be compact strings without whitespace, angle brackets, or HTML
+comment delimiters.
 
 ```sh
 gh-prx body read 123 --range 12:18 --json

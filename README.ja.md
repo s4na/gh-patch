@@ -97,6 +97,7 @@ gh-prx body write 123 --marker section --file section.md --insert-if-missing
 ```
 
 長期的に管理する対象には、周辺の本文編集に強い marker block を推奨します。line-range replacement は、まだ marker がない既存 PR body のための escape hatch です。実際に `body lines` で更新する場合は、`--expect-sha`、`--expect-file`、`--force` のいずれかが必須です。`--dry-run` は guard なしで実行できるため、人間や agent が先に差し替え内容を確認できます。
+marker name は、空白・angle bracket・HTML comment delimiter を含まない compact な文字列にしてください。
 
 ```sh
 gh-prx body read 123 --range 12:18 --json
